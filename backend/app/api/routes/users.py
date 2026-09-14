@@ -5,7 +5,7 @@ from app.db.models import User
 from app.db.session import get_db
 from app.schemas.auth import LoginResponse
 from app.schemas.user import UserCreate, UserLogin
-from app.services.auth import get_current_user_id
+from app.services.auth import get_current_user
 from app.services.jwt import create_access_token
 from app.services.password import hash_password, verify_password
 
@@ -88,15 +88,14 @@ def get_users(db: Session = Depends(get_db)):
 @router.get("/{user_id}")
 def get_user(
     user_id: int,
-    db: Session = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ):
-    user = db.query(User).filter(User.id == user_id).first()
+    user = current_user
 
-    if user is None:
+    if user.id != user_id:
         raise HTTPException(
-            status_code=404,
-            detail="User not found",
+            status_code=403,
+            detail="You can only access your own profile",
         )
 
     return {
