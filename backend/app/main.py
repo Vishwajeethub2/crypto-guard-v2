@@ -1,8 +1,14 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.api.routes.users import router as users_router
 
 app = FastAPI(title=settings.app_name)
+app.include_router(users_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,3 +36,8 @@ async def health():
         "status": "healthy",
         "service": "crypto-guard-api",
     }
+
+@app.get("/health/db")
+def database_health(db: Session = Depends(get_db)):
+    db.execute(text("SELECT 1"))
+    return {"status": "database connected"}
