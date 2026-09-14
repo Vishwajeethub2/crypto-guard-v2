@@ -8,6 +8,7 @@ from alembic import context
 from app.core.config import settings
 from app.db.session import Base
 from app.db.models import User
+from app.db.case_model import Case
 
 # Alembic Config object
 config = context.config
