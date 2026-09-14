@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://localhost:5432/crypto_guard"
 
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -3,7 +3,10 @@ from sqlalchemy.orm import Session
 
 from app.db.models import User
 from app.db.session import get_db
-from app.schemas.user import UserCreate
+from app.schemas.user import UserCreate, UserLogin
+from app.services.auth import get_current_user_id
+from app.services.jwt import create_access_token
+from app.services.password import hash_password, verify_password
 
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -13,6 +16,7 @@ router = APIRouter(prefix="/users", tags=["Users"])
 def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
     user = User(
         email=user_data.email,
+        password_hash=hash_password(user_data.password),
         full_name=user_data.full_name,
     )
 
@@ -35,6 +39,35 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
         "full_name": user.full_name,
     }
 
+
+@router.post("/login")
+def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == user_data.email).first()
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password",
+        )
+
+    if not verify_password(user_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password",
+        )
+
+    access_token = create_access_token(user.id)
+
+    return {
+        "message": "Login successful",
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+    }
+
+
 @router.get("/")
 def get_users(db: Session = Depends(get_db)):
     users = db.query(User).all()
@@ -50,8 +83,13 @@ def get_users(db: Session = Depends(get_db)):
         for user in users
     ]
 
+
 @router.get("/{user_id}")
-def get_user(user_id: int, db: Session = Depends(get_db)):
+def get_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user_id: int = Depends(get_current_user_id),
+):
     user = db.query(User).filter(User.id == user_id).first()
 
     if user is None:
