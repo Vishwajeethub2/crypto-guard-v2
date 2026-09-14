@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.config import settings
 
-app = FastAPI(title="Crypto Guard V2 API")
-
+app = FastAPI(title=settings.app_name)
 
 app.add_middleware(
     CORSMiddleware,
