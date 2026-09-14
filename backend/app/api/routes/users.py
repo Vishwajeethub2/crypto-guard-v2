@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import User
 from app.db.session import get_db
+from app.schemas.auth import LoginResponse
 from app.schemas.user import UserCreate, UserLogin
 from app.services.auth import get_current_user_id
 from app.services.jwt import create_access_token
@@ -40,7 +41,7 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/login")
+@router.post("/login", response_model=LoginResponse)
 def login_user(user_data: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == user_data.email).first()
 
