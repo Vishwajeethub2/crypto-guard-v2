@@ -7,12 +7,14 @@ from app.api.routes.cases import router as cases_router
 from app.api.routes.users import router as users_router
 from app.core.config import settings
 from app.db.session import get_db
+from app.api.routes.wallets import router as wallets_router
 
 
 app = FastAPI(title=settings.app_name)
 
 app.include_router(users_router)
 app.include_router(cases_router)
+app.include_router(wallets_router)
 
 
 app.add_middleware(
