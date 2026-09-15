@@ -6,6 +6,7 @@ from app.db.wallet_model import Wallet
 from app.db.session import get_db
 from app.schemas.wallet import WalletCreate
 from app.services.auth import get_current_user
+from app.services.blockchain import validate_wallet_address
 
 
 router = APIRouter(prefix="/wallets", tags=["Wallets"])
@@ -18,6 +19,12 @@ def create_wallet(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    if not validate_wallet_address(wallet_data.address):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid wallet address",
+        )
+
     case = (
         db.query(Case)
         .filter(
@@ -52,6 +59,7 @@ def create_wallet(
         "label": wallet.label,
         "created_at": wallet.created_at,
     }
+
 
 @router.get("/")
 def get_wallets(
@@ -92,6 +100,7 @@ def get_wallets(
         for wallet in wallets
     ]
 
+
 @router.get("/{wallet_id}")
 def get_wallet(
     wallet_id: int,
@@ -123,6 +132,7 @@ def get_wallet(
         "created_at": wallet.created_at,
     }
 
+
 @router.delete("/{wallet_id}")
 def delete_wallet(
     wallet_id: int,
@@ -152,4 +162,3 @@ def delete_wallet(
         "message": "Wallet deleted successfully",
         "wallet_id": wallet_id,
     }
-
