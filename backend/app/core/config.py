@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
 
     alchemy_api_key: str
+    
+    neo4j_uri: str
+    neo4j_username: str
+    neo4j_password: str
 
 
     model_config = SettingsConfigDict(

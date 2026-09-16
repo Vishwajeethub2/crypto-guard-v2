@@ -2,14 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.case_model import Case
-from app.db.wallet_model import Wallet
 from app.db.session import get_db
+from app.db.wallet_model import Wallet
+from app.schemas.risk import WalletRiskAnalysisResponse
 from app.schemas.wallet import WalletCreate
 from app.services.auth import get_current_user
 from app.services.blockchain import validate_wallet_address
+from app.services.scoring import calculate_wallet_risk
 
 
-router = APIRouter(prefix="/wallets", tags=["Wallets"])
+router = APIRouter(
+    prefix="/wallets",
+    tags=["Wallets"],
+)
 
 
 @router.post("/")
@@ -101,6 +106,38 @@ def get_wallets(
     ]
 
 
+@router.get(
+    "/risk/{address}",
+    response_model=WalletRiskAnalysisResponse,
+)
+def analyze_wallet_risk_api(
+    address: str,
+    chain: str = "ethereum",
+    max_hops: int = 2,
+    current_user=Depends(get_current_user),
+):
+    if not validate_wallet_address(address):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid wallet address",
+        )
+
+    try:
+        result = calculate_wallet_risk(
+            address=address,
+            chain=chain,
+            max_hops=max_hops,
+        )
+
+        return result
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
+
 @router.get("/{wallet_id}")
 def get_wallet(
     wallet_id: int,
@@ -109,7 +146,10 @@ def get_wallet(
 ):
     wallet = (
         db.query(Wallet)
-        .join(Case, Wallet.case_id == Case.id)
+        .join(
+            Case,
+            Wallet.case_id == Case.id,
+        )
         .filter(
             Wallet.id == wallet_id,
             Case.created_by == current_user.id,
@@ -141,7 +181,10 @@ def delete_wallet(
 ):
     wallet = (
         db.query(Wallet)
-        .join(Case, Wallet.case_id == Case.id)
+        .join(
+            Case,
+            Wallet.case_id == Case.id,
+        )
         .filter(
             Wallet.id == wallet_id,
             Case.created_by == current_user.id,

@@ -1,0 +1,9 @@
+{
+  "chain": "ethereum",
+  "address": "0x0000000000000000000000000000000000000000",
+  "native_balance": "14149.803103387147250366",
+  "latest_block": 25983768,
+  "transaction_count": 0,
+  "latest_block_timestamp": 1789486199,
+  "latest_block_hash": "81e1971889ca4a4943bd2b0acc0150c6bca117b294e47d365444e075d5563431"
+}
