@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, MouseEvent } from "react";
 
 import {
   Background,
@@ -98,6 +98,13 @@ type RiskResponse = {
   exposures: RiskExposure[];
 };
 
+type WalletTransaction = {
+  source: string;
+  target: string;
+  transfer: TraceTransfer;
+  hop_count: number;
+};
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 function App() {
@@ -123,6 +130,12 @@ function App() {
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+
+  const [selectedWallet, setSelectedWallet] =
+    useState<string | null>(null);
+
+  const [selectedTransfer, setSelectedTransfer] =
+    useState<WalletTransaction | null>(null);
 
   const [loginLoading, setLoginLoading] = useState(false);
   const [traceLoading, setTraceLoading] = useState(false);
@@ -192,6 +205,8 @@ function App() {
     setRisk(null);
     setNodes([]);
     setEdges([]);
+    setSelectedWallet(null);
+    setSelectedTransfer(null);
     setError(null);
   }
 
@@ -206,6 +221,8 @@ function App() {
     setTraceLoading(true);
     setError(null);
     setRisk(null);
+    setSelectedWallet(null);
+    setSelectedTransfer(null);
 
     try {
       const response = await fetch(
@@ -247,48 +264,56 @@ function App() {
       const walletList = Array.from(walletAddresses);
 
       const generatedNodes: Node[] = walletList.map(
-        (wallet, index) => ({
-          id: wallet,
+        (wallet, index) => {
+          const isTarget =
+            wallet.toLowerCase() ===
+            data.address.toLowerCase();
 
-          position: {
-            x: (index % 4) * 330,
-            y: Math.floor(index / 4) * 240,
-          },
+          return {
+            id: wallet,
 
-          data: {
-            label:
-              wallet.toLowerCase() === data.address.toLowerCase()
-                ? `TARGET WALLET\n${wallet}`
-                : `WALLET\n${wallet}`,
-          },
+            position: {
+              x: (index % 4) * 330,
+              y: Math.floor(index / 4) * 240,
+            },
 
-          style: {
-            padding: 12,
-            borderRadius: 8,
+            data: {
+              label: isTarget
+                ? `TARGET WALLET\n${shortenAddress(wallet)}`
+                : `WALLET\n${shortenAddress(wallet)}`,
+            },
 
-            border:
-              wallet.toLowerCase() === data.address.toLowerCase()
+            style: {
+              padding: 12,
+              borderRadius: 8,
+
+              border: isTarget
                 ? "2px solid #ef4444"
                 : "1px solid #64748b",
 
-            background:
-              wallet.toLowerCase() === data.address.toLowerCase()
+              background: isTarget
                 ? "#3f1720"
                 : "#172033",
 
-            color: "#ffffff",
-            width: 240,
-            fontSize: 12,
-            lineHeight: 1.5,
-            textAlign: "center",
-          },
-        }),
+              color: "#ffffff",
+              width: 240,
+              fontSize: 12,
+              lineHeight: 1.5,
+              textAlign: "center",
+              cursor: "pointer",
+            },
+          };
+        },
       );
 
       const generatedEdges: Edge[] = [];
 
       data.traces.forEach((item, traceIndex) => {
-        for (let i = 0; i < item.wallets.length - 1; i += 1) {
+        for (
+          let i = 0;
+          i < item.wallets.length - 1;
+          i += 1
+        ) {
           const source = item.wallets[i];
           const target = item.wallets[i + 1];
 
@@ -304,7 +329,7 @@ function App() {
               ? `${transfer.asset} ${
                   transfer.value !== null &&
                   transfer.value !== undefined
-                    ? transfer.value
+                    ? formatNumber(transfer.value)
                     : ""
                 }`
               : "TRANSFER",
@@ -388,6 +413,43 @@ function App() {
       setRiskLoading(false);
     }
   }
+
+  function handleNodeClick(
+    _event: MouseEvent,
+    node: Node,
+  ) {
+    setSelectedTransfer(null);
+    setSelectedWallet(node.id);
+  }
+
+  function handleEdgeClick(
+    _event: MouseEvent,
+    edge: Edge,
+  ) {
+    if (!trace) {
+      return;
+    }
+
+    const matchingTransfer = findTransferForEdge(
+      trace,
+      edge.source,
+      edge.target,
+    );
+
+    if (matchingTransfer) {
+      setSelectedWallet(null);
+      setSelectedTransfer(matchingTransfer);
+    }
+  }
+
+  function closeInvestigationPanel() {
+    setSelectedWallet(null);
+    setSelectedTransfer(null);
+  }
+
+  const selectedWalletTransactions = selectedWallet
+    ? getWalletTransactions(trace, selectedWallet)
+    : [];
 
   return (
     <main
@@ -498,15 +560,7 @@ function App() {
           </p>
 
           <form onSubmit={handleLogin}>
-            <label
-              style={{
-                display: "block",
-                fontSize: "13px",
-                marginBottom: "6px",
-              }}
-            >
-              Email
-            </label>
+            <label style={labelStyle}>Email</label>
 
             <input
               type="email"
@@ -518,14 +572,7 @@ function App() {
               style={inputStyle}
             />
 
-            <label
-              style={{
-                display: "block",
-                fontSize: "13px",
-                marginBottom: "6px",
-                marginTop: "14px",
-              }}
-            >
+            <label style={labelStyle}>
               Password
             </label>
 
@@ -544,7 +591,9 @@ function App() {
               disabled={loginLoading}
               style={primaryButtonStyle}
             >
-              {loginLoading ? "Signing in..." : "Sign In"}
+              {loginLoading
+                ? "Signing in..."
+                : "Sign In"}
             </button>
           </form>
         </section>
@@ -623,8 +672,12 @@ function App() {
               style={inputStyle}
             >
               <option value="both">Both</option>
-              <option value="outgoing">Outgoing</option>
-              <option value="incoming">Incoming</option>
+              <option value="outgoing">
+                Outgoing
+              </option>
+              <option value="incoming">
+                Incoming
+              </option>
             </select>
 
             <label style={labelStyle}>
@@ -727,11 +780,11 @@ function App() {
                 Risk Analysis
               </h3>
 
-              {/* SCORE + LEVEL */}
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns:
+                    "1fr 1fr",
                   gap: "8px",
                   marginBottom: "12px",
                 }}
@@ -781,7 +834,6 @@ function App() {
                 </div>
               </div>
 
-              {/* COUNTS */}
               <div
                 style={{
                   display: "grid",
@@ -812,13 +864,13 @@ function App() {
                 </div>
               </div>
 
-              {/* SEVERITY */}
               <div
                 style={{
                   marginTop: "12px",
                   padding: "10px",
                   background: "#0f1117",
-                  border: "1px solid #3b4254",
+                  border:
+                    "1px solid #3b4254",
                   borderRadius: "6px",
                   fontSize: "12px",
                 }}
@@ -858,7 +910,6 @@ function App() {
                 </div>
               </div>
 
-              {/* BEHAVIOR */}
               {risk.behavior && (
                 <div
                   style={{
@@ -944,7 +995,7 @@ function App() {
                 </div>
               )}
 
-              {/* INDICATORS */}
+              {/* RISK INDICATORS */}
               <div
                 style={{
                   marginTop: "14px",
@@ -961,72 +1012,60 @@ function App() {
                   Risk Indicators
                 </h4>
 
-                {risk.indicators.length === 0 ? (
-                  <div
-                    style={{
-                      fontSize: "12px",
-                      color: "#94a3b8",
-                    }}
-                  >
-                    No risk indicators returned.
-                  </div>
-                ) : (
-                  risk.indicators.map(
-                    (indicator, index) => (
+                {risk.indicators.map(
+                  (indicator, index) => (
+                    <div
+                      key={`${indicator.indicator}-${index}`}
+                      style={{
+                        padding: "10px",
+                        marginBottom: "8px",
+                        background: "#0f1117",
+                        border:
+                          "1px solid #3b4254",
+                        borderRadius: "6px",
+                      }}
+                    >
                       <div
-                        key={`${indicator.indicator}-${index}`}
                         style={{
-                          padding: "10px",
-                          marginBottom: "8px",
-                          background:
-                            "#0f1117",
-                          border:
-                            "1px solid #3b4254",
-                          borderRadius: "6px",
+                          fontWeight: 600,
+                          fontSize: "12px",
                         }}
                       >
-                        <div
-                          style={{
-                            fontWeight: 600,
-                            fontSize: "12px",
-                          }}
-                        >
-                          {indicator.indicator}
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop: "4px",
-                            fontSize: "10px",
-                            textTransform:
-                              "uppercase",
-                            color:
-                              riskSeverityColor(
-                                indicator.severity,
-                              ),
-                            fontWeight: 700,
-                          }}
-                        >
-                          {indicator.severity}
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop: "6px",
-                            fontSize: "11px",
-                            color: "#cbd5e1",
-                            lineHeight: 1.5,
-                          }}
-                        >
-                          {indicator.reason}
-                        </div>
+                        {indicator.indicator}
                       </div>
-                    ),
-                  )
+
+                      <div
+                        style={{
+                          marginTop: "4px",
+                          fontSize: "10px",
+                          textTransform:
+                            "uppercase",
+                          color:
+                            riskSeverityColor(
+                              indicator.severity,
+                            ),
+                          fontWeight: 700,
+                        }}
+                      >
+                        {indicator.severity}
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: "6px",
+                          fontSize: "11px",
+                          color: "#cbd5e1",
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {indicator.reason}
+                      </div>
+                    </div>
+                  ),
                 )}
               </div>
 
-              {/* EXPOSURES */}
+              {/* RISK EXPOSURES */}
               {risk.exposures.length > 0 && (
                 <div
                   style={{
@@ -1050,8 +1089,7 @@ function App() {
                         key={`${exposure.risk_entity_address}-${index}`}
                         style={{
                           padding: "10px",
-                          background:
-                            "#0f1117",
+                          background: "#0f1117",
                           border:
                             "1px solid #3b4254",
                           borderRadius: "6px",
@@ -1099,7 +1137,9 @@ function App() {
                               "break-all",
                           }}
                         >
-                          {exposure.risk_entity_address}
+                          {
+                            exposure.risk_entity_address
+                          }
                         </div>
                       </div>
                     ),
@@ -1107,6 +1147,336 @@ function App() {
                 </div>
               )}
             </div>
+          )}
+        </section>
+      )}
+
+      {/* INVESTIGATION PANEL */}
+      {(selectedWallet || selectedTransfer) && (
+        <section
+          style={{
+            position: "absolute",
+            zIndex: 40,
+            top: "86px",
+            right: "20px",
+            width: "360px",
+            maxHeight: "calc(100vh - 106px)",
+            overflowY: "auto",
+            background: "#171a23",
+            border: "1px solid #3b4254",
+            borderRadius: "10px",
+            padding: "18px",
+            boxSizing: "border-box",
+            boxShadow:
+              "0 15px 40px rgba(0,0,0,0.45)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "14px",
+            }}
+          >
+            <h3
+              style={{
+                margin: 0,
+                fontSize: "18px",
+              }}
+            >
+              Investigation
+            </h3>
+
+            <button
+              onClick={closeInvestigationPanel}
+              style={{
+                background: "#272d3a",
+                color: "#ffffff",
+                border:
+                  "1px solid #475569",
+                borderRadius: "5px",
+                padding: "5px 9px",
+                cursor: "pointer",
+              }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* WALLET DETAILS */}
+          {selectedWallet && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>
+                  Wallet
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "8px",
+                    padding: "10px",
+                    background: "#0f1117",
+                    border:
+                      "1px solid #3b4254",
+                    borderRadius: "6px",
+                    wordBreak: "break-all",
+                    fontSize: "12px",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {selectedWallet}
+                </div>
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div style={detailRowStyle}>
+                  <span>Chain</span>
+                  <strong>
+                    {trace?.chain ?? chain}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>Target</span>
+                  <strong>
+                    {selectedWallet.toLowerCase() ===
+                    address.toLowerCase()
+                      ? "Yes"
+                      : "No"}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>Transactions</span>
+                  <strong>
+                    {selectedWalletTransactions.length}
+                  </strong>
+                </div>
+              </div>
+
+              {/* WALLET TRANSACTIONS */}
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>
+                  Related Transfers
+                </div>
+
+                {selectedWalletTransactions.length ===
+                0 ? (
+                  <p
+                    style={{
+                      fontSize: "12px",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    No transfer details found for
+                    this wallet in the current trace.
+                  </p>
+                ) : (
+                  selectedWalletTransactions.map(
+                    (item, index) => (
+                      <div
+                        key={`${item.transfer.transaction_hash}-${index}`}
+                        style={{
+                          marginTop: "8px",
+                          padding: "10px",
+                          background: "#0f1117",
+                          border:
+                            "1px solid #3b4254",
+                          borderRadius: "6px",
+                          fontSize: "11px",
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        <div>
+                          <strong>
+                            Direction:
+                          </strong>{" "}
+                          {item.source.toLowerCase() ===
+                          selectedWallet.toLowerCase()
+                            ? "Outgoing"
+                            : "Incoming"}
+                        </div>
+
+                        <div
+                          style={{
+                            marginTop: "4px",
+                            wordBreak:
+                              "break-all",
+                          }}
+                        >
+                          <strong>
+                            Transaction:
+                          </strong>{" "}
+                          {item.transfer.transaction_hash}
+                        </div>
+
+                        <div>
+                          <strong>Asset:</strong>{" "}
+                          {item.transfer.asset ??
+                            "Unknown"}
+                        </div>
+
+                        <div>
+                          <strong>Value:</strong>{" "}
+                          {item.transfer.value !==
+                          null
+                            ? formatNumber(
+                                item.transfer
+                                  .value,
+                              )
+                            : "Unknown"}
+                        </div>
+
+                        <div>
+                          <strong>Hop:</strong>{" "}
+                          {item.hop_count}
+                        </div>
+                      </div>
+                    ),
+                  )
+                )}
+              </div>
+            </>
+          )}
+
+          {/* TRANSFER DETAILS */}
+          {selectedTransfer && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>
+                  Transaction
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "8px",
+                    padding: "10px",
+                    background: "#0f1117",
+                    border:
+                      "1px solid #3b4254",
+                    borderRadius: "6px",
+                    wordBreak: "break-all",
+                    fontSize: "11px",
+                  }}
+                >
+                  {
+                    selectedTransfer.transfer
+                      .transaction_hash
+                  }
+                </div>
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div style={detailRowStyle}>
+                  <span>From</span>
+                  <strong
+                    style={{
+                      maxWidth: "210px",
+                      wordBreak: "break-all",
+                      textAlign: "right",
+                      fontSize: "10px",
+                    }}
+                  >
+                    {selectedTransfer.source}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>To</span>
+                  <strong
+                    style={{
+                      maxWidth: "210px",
+                      wordBreak: "break-all",
+                      textAlign: "right",
+                      fontSize: "10px",
+                    }}
+                  >
+                    {selectedTransfer.target}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>Asset</span>
+                  <strong>
+                    {selectedTransfer.transfer.asset ??
+                      "Unknown"}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>Value</span>
+                  <strong>
+                    {selectedTransfer.transfer
+                      .value !== null
+                      ? formatNumber(
+                          selectedTransfer
+                            .transfer.value,
+                        )
+                      : "Unknown"}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>Category</span>
+                  <strong>
+                    {selectedTransfer.transfer
+                      .category ?? "Unknown"}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>Block</span>
+                  <strong>
+                    {selectedTransfer.transfer
+                      .block_number ?? "Unknown"}
+                  </strong>
+                </div>
+
+                <div style={detailRowStyle}>
+                  <span>Hop</span>
+                  <strong>
+                    {selectedTransfer.hop_count}
+                  </strong>
+                </div>
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>
+                  Timestamp
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "7px",
+                    fontSize: "11px",
+                    color: "#cbd5e1",
+                  }}
+                >
+                  {selectedTransfer.transfer
+                    .timestamp ?? "Unknown"}
+                </div>
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>
+                  Contract Address
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "7px",
+                    fontSize: "10px",
+                    color: "#94a3b8",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {selectedTransfer.transfer
+                    .contract_address ??
+                    "Native transfer / Unknown"}
+                </div>
+              </div>
+            </>
           )}
         </section>
       )}
@@ -1145,6 +1515,9 @@ function App() {
           fitView
           minZoom={0.2}
           maxZoom={2}
+          onNodeClick={handleNodeClick}
+          onEdgeClick={handleEdgeClick}
+          onPaneClick={closeInvestigationPanel}
         >
           <Background />
 
@@ -1165,6 +1538,108 @@ function App() {
       </div>
     </main>
   );
+}
+
+function findTransferForEdge(
+  trace: TraceResponse,
+  source: string,
+  target: string,
+): WalletTransaction | null {
+  for (const item of trace.traces) {
+    for (
+      let i = 0;
+      i < item.wallets.length - 1;
+      i += 1
+    ) {
+      const currentSource = item.wallets[i];
+      const currentTarget = item.wallets[i + 1];
+
+      if (
+        currentSource.toLowerCase() ===
+          source.toLowerCase() &&
+        currentTarget.toLowerCase() ===
+          target.toLowerCase()
+      ) {
+        const transfer = item.transfers[i];
+
+        if (!transfer) {
+          continue;
+        }
+
+        return {
+          source: currentSource,
+          target: currentTarget,
+          transfer,
+          hop_count: item.hop_count,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function getWalletTransactions(
+  trace: TraceResponse | null,
+  wallet: string,
+): WalletTransaction[] {
+  if (!trace) {
+    return [];
+  }
+
+  const transactions: WalletTransaction[] = [];
+
+  trace.traces.forEach((item) => {
+    for (
+      let i = 0;
+      i < item.wallets.length - 1;
+      i += 1
+    ) {
+      const source = item.wallets[i];
+      const target = item.wallets[i + 1];
+      const transfer = item.transfers[i];
+
+      if (!transfer) {
+        continue;
+      }
+
+      if (
+        source.toLowerCase() === wallet.toLowerCase() ||
+        target.toLowerCase() === wallet.toLowerCase()
+      ) {
+        const alreadyAdded = transactions.some(
+          (existing) =>
+            existing.transfer.transaction_hash ===
+            transfer.transaction_hash,
+        );
+
+        if (!alreadyAdded) {
+          transactions.push({
+            source,
+            target,
+            transfer,
+            hop_count: item.hop_count,
+          });
+        }
+      }
+    }
+  });
+
+  return transactions;
+}
+
+function shortenAddress(address: string): string {
+  if (address.length <= 14) {
+    return address;
+  }
+
+  return `${address.slice(0, 8)}...${address.slice(-6)}`;
+}
+
+function formatNumber(value: number): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: 6,
+  });
 }
 
 function riskLevelColor(
@@ -1287,6 +1762,27 @@ const behaviorCardStyle: React.CSSProperties = {
 const smallTitleStyle: React.CSSProperties = {
   fontSize: "11px",
   color: "#94a3b8",
+};
+
+const panelSectionStyle: React.CSSProperties = {
+  marginTop: "14px",
+  paddingTop: "12px",
+  borderTop: "1px solid #2f3545",
+};
+
+const sectionTitleStyle: React.CSSProperties = {
+  fontSize: "12px",
+  fontWeight: 700,
+  color: "#ffffff",
+};
+
+const detailRowStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  padding: "7px 0",
+  fontSize: "11px",
+  color: "#cbd5e1",
 };
 
 export default App;
