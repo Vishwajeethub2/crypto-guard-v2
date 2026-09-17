@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.case_model import Case
+from app.db.neo4j import trace_wallet
 from app.db.session import get_db
 from app.db.wallet_model import Wallet
 from app.schemas.risk import WalletRiskAnalysisResponse
@@ -130,6 +131,44 @@ def analyze_wallet_risk_api(
         )
 
         return result
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
+
+@router.get("/trace/{address}")
+def trace_wallet_api(
+    address: str,
+    chain: str = "ethereum",
+    direction: str = "both",
+    max_hops: int = 2,
+    current_user=Depends(get_current_user),
+):
+    if not validate_wallet_address(address):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid wallet address",
+        )
+
+    try:
+        traces = trace_wallet(
+            address=address,
+            chain=chain,
+            direction=direction,
+            max_hops=max_hops,
+        )
+
+        return {
+            "address": address,
+            "chain": chain.lower(),
+            "direction": direction.lower(),
+            "max_hops": max_hops,
+            "trace_count": len(traces),
+            "traces": traces,
+        }
 
     except ValueError as error:
         raise HTTPException(
