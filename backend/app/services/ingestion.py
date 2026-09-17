@@ -12,37 +12,60 @@ from app.services.blockchain import (
 )
 
 
-def get_existing_transaction_hashes(
+def get_existing_transaction_keys(
     transactions: list[dict],
-) -> set[str]:
+) -> set[tuple[str, str]]:
     """
-    Find transaction hashes that already exist in Neo4j.
+    Find transactions that already exist in Neo4j.
+
+    Transaction identity is based on:
+        chain + transaction_hash
     """
 
-    transaction_hashes = {
-        transaction["transaction_hash"]
+    transaction_keys = {
+        (
+            transaction.get("chain", "ethereum").lower(),
+            transaction["transaction_hash"],
+        )
         for transaction in transactions
         if transaction.get("transaction_hash")
     }
 
-    if not transaction_hashes:
+    if not transaction_keys:
         return set()
+
+    transaction_hashes = {
+        transaction_hash
+        for _, transaction_hash in transaction_keys
+    }
 
     with get_neo4j_session() as session:
         result = session.run(
             """
             MATCH ()-[t:TRANSFER]->()
             WHERE t.transaction_hash IN $transaction_hashes
-            RETURN DISTINCT t.transaction_hash AS transaction_hash
+            RETURN
+                t.chain AS chain,
+                t.transaction_hash AS transaction_hash
             """,
             transaction_hashes=list(transaction_hashes),
         )
 
-        return {
-            record["transaction_hash"]
-            for record in result
-            if record["transaction_hash"]
-        }
+        existing_keys = set()
+
+        for record in result:
+            chain = record["chain"]
+            transaction_hash = record["transaction_hash"]
+
+            if chain and transaction_hash:
+                existing_keys.add(
+                    (
+                        str(chain).lower(),
+                        transaction_hash,
+                    )
+                )
+
+        return existing_keys
 
 
 def validate_graph_transaction(
@@ -56,25 +79,53 @@ def validate_graph_transaction(
         (False, reason) when invalid.
     """
 
-    transaction_hash = transaction.get("transaction_hash")
+    transaction_hash = transaction.get(
+        "transaction_hash"
+    )
 
     if not transaction_hash:
         return False, "Missing transaction hash"
 
-    from_address = transaction.get("from_address")
+    chain = transaction.get("chain")
+
+    if not chain:
+        return False, "Missing chain"
+
+    chain = chain.lower()
+
+    supported_chains = {
+        "ethereum",
+        "polygon",
+        "arbitrum",
+        "optimism",
+        "base",
+    }
+
+    if chain not in supported_chains:
+        return False, "Unsupported chain"
+
+    from_address = transaction.get(
+        "from_address"
+    )
 
     if not from_address:
         return False, "Missing sender address"
 
-    if not validate_wallet_address(from_address):
+    if not validate_wallet_address(
+        from_address
+    ):
         return False, "Invalid sender address"
 
-    to_address = transaction.get("to_address")
+    to_address = transaction.get(
+        "to_address"
+    )
 
     if not to_address:
         return False, "Missing receiver address"
 
-    if not validate_wallet_address(to_address):
+    if not validate_wallet_address(
+        to_address
+    ):
         return False, "Invalid receiver address"
 
     if transaction.get("block_number") is None:
@@ -113,7 +164,9 @@ def ingest_saved_transfers(
         )
 
         if is_valid:
-            valid_transactions.append(transaction)
+            valid_transactions.append(
+                transaction
+            )
         else:
             invalid_transactions.append(
                 {
@@ -124,22 +177,30 @@ def ingest_saved_transfers(
                 }
             )
 
-    existing_hashes = get_existing_transaction_hashes(
+    existing_keys = get_existing_transaction_keys(
         valid_transactions
     )
 
     new_transactions = [
         transaction
         for transaction in valid_transactions
-        if transaction["transaction_hash"]
-        not in existing_hashes
+        if (
+            transaction.get(
+                "chain",
+                "ethereum",
+            ).lower(),
+            transaction["transaction_hash"],
+        )
+        not in existing_keys
     ]
 
     if new_transactions:
         result = ingest_transfer_batch(
             new_transactions
         )
-        ingested_count = result["ingested_count"]
+        ingested_count = result[
+            "ingested_count"
+        ]
     else:
         ingested_count = 0
 
@@ -147,11 +208,21 @@ def ingest_saved_transfers(
         "chain": chain,
         "source": "saved_data",
         "total_found": len(transfers),
-        "normalized_count": len(graph_transactions),
-        "valid_count": len(valid_transactions),
-        "invalid_count": len(invalid_transactions),
-        "new_count": len(new_transactions),
-        "duplicate_count": len(existing_hashes),
+        "normalized_count": len(
+            graph_transactions
+        ),
+        "valid_count": len(
+            valid_transactions
+        ),
+        "invalid_count": len(
+            invalid_transactions
+        ),
+        "new_count": len(
+            new_transactions
+        ),
+        "duplicate_count": len(
+            existing_keys
+        ),
         "ingested_count": ingested_count,
         "invalid_records": invalid_transactions,
     }
@@ -169,8 +240,12 @@ def ingest_live_transfers(
 
     chain = chain.lower()
 
-    if not validate_wallet_address(address):
-        raise ValueError("Invalid wallet address")
+    if not validate_wallet_address(
+        address
+    ):
+        raise ValueError(
+            "Invalid wallet address"
+        )
 
     if max_count < 1 or max_count > 100:
         raise ValueError(
@@ -183,7 +258,9 @@ def ingest_live_transfers(
         max_count=max_count,
     )
 
-    raw_transfers = alchemy_response["transfers"]
+    raw_transfers = (
+        alchemy_response["transfers"]
+    )
 
     parsed_transfers = parse_transfer_data(
         raw_transfers
@@ -205,7 +282,9 @@ def ingest_live_transfers(
         )
 
         if is_valid:
-            valid_transactions.append(transaction)
+            valid_transactions.append(
+                transaction
+            )
         else:
             invalid_transactions.append(
                 {
@@ -216,22 +295,30 @@ def ingest_live_transfers(
                 }
             )
 
-    existing_hashes = get_existing_transaction_hashes(
+    existing_keys = get_existing_transaction_keys(
         valid_transactions
     )
 
     new_transactions = [
         transaction
         for transaction in valid_transactions
-        if transaction["transaction_hash"]
-        not in existing_hashes
+        if (
+            transaction.get(
+                "chain",
+                "ethereum",
+            ).lower(),
+            transaction["transaction_hash"],
+        )
+        not in existing_keys
     ]
 
     if new_transactions:
         result = ingest_transfer_batch(
             new_transactions
         )
-        ingested_count = result["ingested_count"]
+        ingested_count = result[
+            "ingested_count"
+        ]
     else:
         ingested_count = 0
 
@@ -240,11 +327,21 @@ def ingest_live_transfers(
         "source": "alchemy",
         "address": address,
         "total_found": len(raw_transfers),
-        "normalized_count": len(graph_transactions),
-        "valid_count": len(valid_transactions),
-        "invalid_count": len(invalid_transactions),
-        "new_count": len(new_transactions),
-        "duplicate_count": len(existing_hashes),
+        "normalized_count": len(
+            graph_transactions
+        ),
+        "valid_count": len(
+            valid_transactions
+        ),
+        "invalid_count": len(
+            invalid_transactions
+        ),
+        "new_count": len(
+            new_transactions
+        ),
+        "duplicate_count": len(
+            existing_keys
+        ),
         "ingested_count": ingested_count,
         "invalid_records": invalid_transactions,
     }

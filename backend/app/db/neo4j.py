@@ -75,6 +75,7 @@ def create_transfer_relationship(transaction: dict):
 
             MERGE (sender)-[
                 t:TRANSFER {
+                    chain: $chain,
                     transaction_hash: $transaction_hash
                 }
             ]->(receiver)
@@ -90,11 +91,15 @@ def create_transfer_relationship(transaction: dict):
             RETURN
                 sender.address AS from_address,
                 receiver.address AS to_address,
+                t.chain AS chain,
                 t.transaction_hash AS transaction_hash
             """,
             from_address=transaction["from_address"],
             to_address=transaction["to_address"],
-            chain=transaction.get("chain", "ethereum").lower(),
+            chain=transaction.get(
+                "chain",
+                "ethereum",
+            ).lower(),
             transaction_hash=transaction["transaction_hash"],
             asset=transaction["asset"],
             value=transaction["value"],
@@ -124,6 +129,7 @@ def ingest_transfer_batch(transactions: list[dict]):
 
                 MERGE (sender)-[
                     t:TRANSFER {
+                        chain: $chain,
                         transaction_hash: $transaction_hash
                     }
                 ]->(receiver)
@@ -138,7 +144,10 @@ def ingest_transfer_batch(transactions: list[dict]):
                 """,
                 from_address=transaction["from_address"],
                 to_address=transaction["to_address"],
-                chain=transaction.get("chain", "ethereum").lower(),
+                chain=transaction.get(
+                    "chain",
+                    "ethereum",
+                ).lower(),
                 transaction_hash=transaction["transaction_hash"],
                 asset=transaction["asset"],
                 value=transaction["value"],
@@ -394,6 +403,7 @@ def create_test_chain():
             "contract_address": (
                 "0x2222222222222222222222222222222222222222"
             ),
+            "chain": "ethereum",
         }
     ]
 
@@ -631,8 +641,12 @@ def get_risk_entity_exposure(
         for record in result:
             exposures.append(
                 {
-                    "risk_entity_address": record["risk_entity_address"],
-                    "risk_entity_chain": record["risk_entity_chain"],
+                    "risk_entity_address": record[
+                        "risk_entity_address"
+                    ],
+                    "risk_entity_chain": record[
+                        "risk_entity_chain"
+                    ],
                     "entity_type": record["entity_type"],
                     "entity_name": record["entity_name"],
                     "source": record["source"],
@@ -643,6 +657,7 @@ def get_risk_entity_exposure(
             )
 
         return exposures
+
 
 def get_transaction_details(transaction_hash: str):
     with get_neo4j_session() as session:

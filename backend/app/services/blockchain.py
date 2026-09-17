@@ -238,6 +238,10 @@ def build_graph_transactions(transfers: list[dict]):
     for transfer in transfers:
         graph_transactions.append(
             {
+                "chain": transfer.get(
+                    "chain",
+                    "ethereum",
+                ).lower(),
                 "from_address": transfer["from"],
                 "to_address": transfer["to"],
                 "transaction_hash": transfer["hash"],
