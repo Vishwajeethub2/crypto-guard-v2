@@ -10,6 +10,7 @@ import {
   type Edge,
   type Node,
   type NodeChange,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 
 import "@xyflow/react/dist/style.css";
@@ -219,8 +220,8 @@ function App() {
   const [edges, setEdges] =
     useState<Edge[]>([]);
 
-  const [graphRisk, setGraphRisk] =
-    useState<Record<string, RiskResponse>>({});
+  const [reactFlowInstance, setReactFlowInstance] =
+    useState<ReactFlowInstance | null>(null);
 
   /* =========================
      INVESTIGATION STATE
@@ -520,7 +521,6 @@ function App() {
 
     setNodes([]);
     setEdges([]);
-    setGraphRisk({});
 
     setSelectedWallet(null);
     setSelectedTransfer(null);
@@ -954,7 +954,6 @@ function App() {
     setError(null);
 
     setRisk(null);
-    setGraphRisk({});
     setSelectedWallet(null);
     setSelectedTransfer(null);
 
@@ -1015,61 +1014,6 @@ function App() {
           walletAddresses,
         );
 
-      /* =========================
-         LOAD RISK FOR GRAPH NODES
-         Uses the backend risk service.
-         No direct Alchemy calls here.
-      ========================= */
-
-      const graphRiskEntries =
-        await Promise.all(
-          walletList.map(
-            async (wallet) => {
-              try {
-                const riskResponse =
-                  await fetch(
-                    `${API_URL}/wallets/risk/${encodeURIComponent(wallet)}?chain=${encodeURIComponent(chain)}&max_hops=2`,
-                    {
-                      headers: {
-                        Authorization: `Bearer ${token}`,
-                      },
-                    },
-                  );
-
-                if (!riskResponse.ok) {
-                  return null;
-                }
-
-                const walletRisk: RiskResponse =
-                  await riskResponse.json();
-
-                return [
-                  wallet.toLowerCase(),
-                  walletRisk,
-                ] as const;
-              } catch {
-                return null;
-              }
-            },
-          ),
-        );
-
-      const nextGraphRisk: Record<
-        string,
-        RiskResponse
-      > = {};
-
-      graphRiskEntries.forEach(
-        (entry) => {
-          if (entry) {
-            nextGraphRisk[entry[0]] =
-              entry[1];
-          }
-        },
-      );
-
-      setGraphRisk(nextGraphRisk);
-
       const generatedNodes: Node[] =
         walletList.map(
           (
@@ -1079,26 +1023,6 @@ function App() {
             const isTarget =
               wallet.toLowerCase() ===
               data.address.toLowerCase();
-
-            const walletRisk =
-              nextGraphRisk[
-                wallet.toLowerCase()
-              ];
-
-            const riskLevel =
-              walletRisk?.risk_level;
-
-            const riskColor =
-              riskLevel
-                ? riskLevelColor(
-                    riskLevel,
-                  )
-                : "#64748b";
-
-            const riskText =
-              riskLevel
-                ? riskLevel.toUpperCase()
-                : "UNASSESSED";
 
             return {
               id: wallet,
@@ -1114,7 +1038,9 @@ function App() {
               },
 
               data: {
-                label: `${isTarget ? "TARGET WALLET" : "WALLET"}\\n${shortenAddress(wallet)}\\nRISK: ${riskText}${walletRisk ? ` • ${walletRisk.risk_score}` : ""}`,
+                label: isTarget
+                  ? `TARGET WALLET\n${shortenAddress(wallet)}`
+                  : `WALLET\n${shortenAddress(wallet)}`,
               },
 
               style: {
@@ -1122,8 +1048,8 @@ function App() {
                 borderRadius: 8,
 
                 border: isTarget
-                  ? `2px solid ${riskLevel ? riskColor : "#ef4444"}`
-                  : `2px solid ${riskColor}`,
+                  ? "2px solid #ef4444"
+                  : "1px solid #64748b",
 
                 background:
                   isTarget
@@ -1313,6 +1239,105 @@ function App() {
     setNodes((currentNodes) =>
       applyNodeChanges(changes, currentNodes),
     );
+  }
+
+  /* =========================
+     GRAPH LAYOUT CONTROLS
+  ========================= */
+
+  function handleAutoLayout() {
+    if (nodes.length === 0) {
+      return;
+    }
+
+    const targetNode =
+      nodes.find((node) =>
+        String(node.data?.label ?? "").startsWith("TARGET"),
+      ) ?? nodes[0];
+
+    const adjacency = new Map<string, string[]>();
+
+    nodes.forEach((node) => {
+      adjacency.set(node.id, []);
+    });
+
+    edges.forEach((edge) => {
+      adjacency.get(edge.source)?.push(edge.target);
+      adjacency.get(edge.target)?.push(edge.source);
+    });
+
+    const levels = new Map<string, number>();
+    const queue: string[] = [targetNode.id];
+    levels.set(targetNode.id, 0);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+
+      const currentLevel = levels.get(current) ?? 0;
+
+      for (const neighbor of adjacency.get(current) ?? []) {
+        if (!levels.has(neighbor)) {
+          levels.set(neighbor, currentLevel + 1);
+          queue.push(neighbor);
+        }
+      }
+    }
+
+    const fallbackLevel = Math.max(
+      0,
+      ...Array.from(levels.values()),
+    ) + 1;
+
+    nodes.forEach((node) => {
+      if (!levels.has(node.id)) {
+        levels.set(node.id, fallbackLevel);
+      }
+    });
+
+    const levelCounts = new Map<number, number>();
+
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => {
+        const level = levels.get(node.id) ?? 0;
+        const index = levelCounts.get(level) ?? 0;
+        levelCounts.set(level, index + 1);
+
+        return {
+          ...node,
+          position: {
+            x: level * 320,
+            y: index * 220,
+          },
+        };
+      }),
+    );
+
+    window.setTimeout(() => {
+      reactFlowInstance?.fitView({ padding: 0.2 });
+    }, 0);
+  }
+
+  function handleResetLayout() {
+    setNodes((currentNodes) =>
+      currentNodes.map((node, index) => ({
+        ...node,
+        position: {
+          x: (index % 4) * 330,
+          y: Math.floor(index / 4) * 240,
+        },
+      })),
+    );
+
+    window.setTimeout(() => {
+      reactFlowInstance?.fitView({ padding: 0.2 });
+    }, 0);
+  }
+
+  function handleFitGraph() {
+    reactFlowInstance?.fitView({ padding: 0.2 });
   }
 
   /* =========================
@@ -2703,19 +2728,6 @@ function App() {
                       edges.length
                     }
                   </div>
-
-                  <div>
-                    <strong>
-                      Risk-assessed:
-                    </strong>{" "}
-                    {
-                      Object.keys(graphRisk).length
-                    }
-                    /
-                    {
-                      nodes.length
-                    }
-                  </div>
                 </div>
               )}
 
@@ -3365,12 +3377,54 @@ function App() {
           width: "100%",
           height:
             "calc(100vh - 70px)",
+          position: "relative",
         }}
       >
+        {token && trace && nodes.length > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: "16px",
+              right: "20px",
+              zIndex: 10,
+              display: "flex",
+              gap: "8px",
+              padding: "8px",
+              background: "rgba(23, 26, 35, 0.94)",
+              border: "1px solid #2f3545",
+              borderRadius: "8px",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleAutoLayout}
+              style={graphControlButtonStyle}
+            >
+              Auto Layout
+            </button>
+            <button
+              type="button"
+              onClick={handleResetLayout}
+              style={graphControlButtonStyle}
+            >
+              Reset Layout
+            </button>
+            <button
+              type="button"
+              onClick={handleFitGraph}
+              style={graphControlButtonStyle}
+            >
+              Fit Graph
+            </button>
+          </div>
+        )}
+
         <ReactFlow
           nodes={nodes}
           edges={edges}
           fitView
+          onInit={setReactFlowInstance}
           minZoom={0.2}
           maxZoom={2}
           onNodesChange={
@@ -3398,23 +3452,9 @@ function App() {
                     "",
                 );
 
-              if (label.includes("CRITICAL")) {
-                return "#f87171";
-              }
-
-              if (label.includes("HIGH")) {
-                return "#fb923c";
-              }
-
-              if (label.includes("MODERATE")) {
-                return "#facc15";
-              }
-
-              if (label.includes("LOW")) {
-                return "#4ade80";
-              }
-
-              return label.startsWith("TARGET")
+              return label.startsWith(
+                "TARGET",
+              )
                 ? "#ef4444"
                 : "#64748b";
             }}
@@ -3424,6 +3464,17 @@ function App() {
     </main>
   );
 }
+
+const graphControlButtonStyle = {
+  background: "#272d3a",
+  color: "#ffffff",
+  border: "1px solid #475569",
+  borderRadius: "5px",
+  padding: "7px 10px",
+  cursor: "pointer",
+  fontSize: "11px",
+  fontWeight: 600,
+} as const;
 
 /* =========================
    RISK DASHBOARD
