@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.case_model import Case
-from app.db.neo4j import trace_wallet
+from app.db.neo4j import get_transaction_details, trace_wallet
 from app.db.session import get_db
 from app.db.wallet_model import Wallet
 from app.schemas.risk import WalletRiskAnalysisResponse
@@ -175,6 +175,24 @@ def trace_wallet_api(
             status_code=400,
             detail=str(error),
         )
+
+
+@router.get("/transaction/{transaction_hash}")
+def get_transaction_details_api(
+    transaction_hash: str,
+    current_user=Depends(get_current_user),
+):
+    transaction = get_transaction_details(
+        transaction_hash=transaction_hash,
+    )
+
+    if transaction is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found",
+        )
+
+    return transaction
 
 
 @router.get("/{wallet_id}")

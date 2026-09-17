@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.api.routes.ingestion import router as ingestion_router
 
 from app.api.routes.cases import router as cases_router
 from app.api.routes.users import router as users_router
@@ -15,6 +16,7 @@ app = FastAPI(title=settings.app_name)
 app.include_router(users_router)
 app.include_router(cases_router)
 app.include_router(wallets_router)
+app.include_router(ingestion_router)
 
 
 app.add_middleware(

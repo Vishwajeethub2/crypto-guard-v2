@@ -643,3 +643,33 @@ def get_risk_entity_exposure(
             )
 
         return exposures
+
+def get_transaction_details(transaction_hash: str):
+    with get_neo4j_session() as session:
+        result = session.run(
+            """
+            MATCH (sender:Wallet)-[t:TRANSFER {
+                transaction_hash: $transaction_hash
+            }]->(receiver:Wallet)
+
+            RETURN
+                t.transaction_hash AS transaction_hash,
+                sender.address AS from_address,
+                receiver.address AS to_address,
+                sender.chain AS chain,
+                t.asset AS asset,
+                t.value AS value,
+                t.category AS category,
+                t.block_number AS block_number,
+                t.timestamp AS timestamp,
+                t.contract_address AS contract_address
+            """,
+            transaction_hash=transaction_hash,
+        )
+
+        record = result.single()
+
+        if record is None:
+            return None
+
+        return dict(record)

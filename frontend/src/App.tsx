@@ -220,6 +220,25 @@ function App() {
   const [edges, setEdges] =
     useState<Edge[]>([]);
 
+  /* =========================
+     GRAPH FILTER STATE
+  ========================= */
+
+  const [transactionSearch, setTransactionSearch] =
+    useState("");
+
+  const [assetFilter, setAssetFilter] =
+    useState("all");
+
+  const [directionFilter, setDirectionFilter] =
+    useState("all");
+
+  const [minValueFilter, setMinValueFilter] =
+    useState("");
+
+  const [maxValueFilter, setMaxValueFilter] =
+    useState("");
+
   const [reactFlowInstance, setReactFlowInstance] =
     useState<ReactFlowInstance | null>(null);
 
@@ -232,6 +251,15 @@ function App() {
 
   const [selectedTransfer, setSelectedTransfer] =
     useState<WalletTransaction | null>(null);
+
+  const [investigationTab, setInvestigationTab] =
+    useState<"wallet" | "transaction">("wallet");
+
+  const [sidebarCollapsed, setSidebarCollapsed] =
+    useState(false);
+
+  const [graphFiltersOpen, setGraphFiltersOpen] =
+    useState(false);
 
   /* =========================
      LOADING / ERROR
@@ -1106,6 +1134,11 @@ function App() {
               source,
               target,
 
+              data: {
+                transfer,
+                hop_count: item.hop_count,
+              },
+
               label: transfer?.asset
                 ? `${transfer.asset} ${
                     transfer.value !==
@@ -1350,6 +1383,7 @@ function App() {
   ) {
     setSelectedTransfer(null);
     setSelectedWallet(node.id);
+    setInvestigationTab("wallet");
   }
 
   /* =========================
@@ -1377,6 +1411,7 @@ function App() {
       setSelectedTransfer(
         matchingTransfer,
       );
+      setInvestigationTab("transaction");
     }
   }
 
@@ -1387,6 +1422,7 @@ function App() {
   function closeInvestigationPanel() {
     setSelectedWallet(null);
     setSelectedTransfer(null);
+    setInvestigationTab("wallet");
   }
 
   const selectedWalletTransactions =
@@ -1396,6 +1432,104 @@ function App() {
           selectedWallet,
         )
       : [];
+
+  const availableAssets = Array.from(
+    new Set(
+      edges
+        .map((edge) =>
+          String(
+            (edge.data as { transfer?: TraceTransfer } | undefined)
+              ?.transfer?.asset ??
+            "",
+          ).trim(),
+        )
+        .filter(Boolean),
+    ),
+  ).sort();
+
+  const filteredEdges = edges.filter((edge) => {
+    const transfer = (
+      edge.data as { transfer?: TraceTransfer } | undefined
+    )?.transfer;
+
+    if (!transfer) {
+      return false;
+    }
+
+    const search = transactionSearch.trim().toLowerCase();
+    if (
+      search &&
+      !transfer.transaction_hash.toLowerCase().includes(search)
+    ) {
+      return false;
+    }
+
+    if (
+      assetFilter !== "all" &&
+      (transfer.asset ?? "").toLowerCase() !==
+        assetFilter.toLowerCase()
+    ) {
+      return false;
+    }
+
+    if (directionFilter !== "all" && trace) {
+      const target = trace.address.toLowerCase();
+      const source = edge.source.toLowerCase();
+      const destination = edge.target.toLowerCase();
+
+      const isOutgoing = source === target;
+      const isIncoming = destination === target;
+
+      if (directionFilter === "outgoing" && !isOutgoing) {
+        return false;
+      }
+
+      if (directionFilter === "incoming" && !isIncoming) {
+        return false;
+      }
+    }
+
+    const value = transfer.value;
+
+    if (minValueFilter.trim() && value !== null) {
+      const minimum = Number(minValueFilter);
+      if (Number.isFinite(minimum) && value < minimum) {
+        return false;
+      }
+    }
+
+    if (maxValueFilter.trim() && value !== null) {
+      const maximum = Number(maxValueFilter);
+      if (Number.isFinite(maximum) && value > maximum) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  const filteredNodeIds = new Set<string>();
+  filteredEdges.forEach((edge) => {
+    filteredNodeIds.add(edge.source);
+    filteredNodeIds.add(edge.target);
+  });
+
+  const filteredNodes =
+    transactionSearch.trim() ||
+    assetFilter !== "all" ||
+    directionFilter !== "all" ||
+    minValueFilter.trim() ||
+    maxValueFilter.trim()
+      ? nodes.filter((node) => filteredNodeIds.has(node.id))
+      : nodes;
+
+  function clearGraphFilters() {
+    setTransactionSearch("");
+    setAssetFilter("all");
+    setDirectionFilter("all");
+    setMinValueFilter("");
+    setMaxValueFilter("");
+  }
 
   /* =========================
      RENDER
@@ -1415,11 +1549,14 @@ function App() {
           "Arial, sans-serif",
       }}
     >
+      <style>{responsiveCss}</style>
+
       {/* =====================
           TOP BAR
       ===================== */}
 
       <header
+        className="cg-header"
         style={{
           height: "70px",
           display: "flex",
@@ -1470,10 +1607,25 @@ function App() {
         </div>
 
         {token && (
-          <button
-            onClick={
-              handleLogout
-            }
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((current) => !current)}
+              title={sidebarCollapsed ? "Open workspace panel" : "Collapse workspace panel"}
+              style={workspaceToggleButtonStyle}
+            >
+              {sidebarCollapsed ? "☰ Workspace" : "☰"}
+            </button>
+            <button
+              onClick={
+                handleLogout
+              }
             style={{
               background:
                 "#272d3a",
@@ -1491,6 +1643,7 @@ function App() {
           >
             Logout
           </button>
+          </div>
         )}
       </header>
 
@@ -1633,8 +1786,9 @@ function App() {
           LEFT SIDEBAR
       ===================== */}
 
-      {token && (
+      {token && !sidebarCollapsed && (
         <section
+          className="cg-sidebar"
           style={{
             position:
               "absolute",
@@ -2769,6 +2923,7 @@ function App() {
       {(selectedWallet ||
         selectedTransfer) && (
         <section
+          className="cg-investigation"
           style={{
             position:
               "absolute",
@@ -2839,9 +2994,28 @@ function App() {
             </button>
           </div>
 
+          {selectedWallet && selectedTransfer && (
+            <div style={investigationTabsStyle}>
+              <button
+                type="button"
+                onClick={() => setInvestigationTab("wallet")}
+                style={investigationTabStyle(investigationTab === "wallet")}
+              >
+                Wallet
+              </button>
+              <button
+                type="button"
+                onClick={() => setInvestigationTab("transaction")}
+                style={investigationTabStyle(investigationTab === "transaction")}
+              >
+                Transaction
+              </button>
+            </div>
+          )}
+
           {/* WALLET DETAILS */}
 
-          {selectedWallet && (
+          {selectedWallet && (!selectedTransfer || investigationTab === "wallet") && (
             <>
               <div
                 style={
@@ -3067,7 +3241,7 @@ function App() {
 
           {/* TRANSACTION DETAILS */}
 
-          {selectedTransfer && (
+          {selectedTransfer && (!selectedWallet || investigationTab === "transaction") && (
             <>
               <div
                 style={
@@ -3373,6 +3547,7 @@ function App() {
       ===================== */}
 
       <div
+        className="cg-graph"
         style={{
           width: "100%",
           height:
@@ -3381,12 +3556,138 @@ function App() {
         }}
       >
         {token && trace && nodes.length > 0 && (
-          <div
-            style={{
-              position: "absolute",
-              top: "16px",
-              right: "20px",
-              zIndex: 10,
+          <>
+            <div
+              className="cg-filter"
+              style={{
+                position: "absolute",
+                top: "16px",
+                left: "430px",
+                zIndex: 10,
+                width: "270px",
+                padding: "12px",
+                background: "rgba(23, 26, 35, 0.96)",
+                border: "1px solid #2f3545",
+                borderRadius: "8px",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "8px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <strong style={{ fontSize: "12px" }}>
+                    Graph Filters
+                  </strong>
+                  <span style={filterCountBadgeStyle}>
+                    {filteredEdges.length}/{edges.length}
+                  </span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setGraphFiltersOpen((current) => !current)}
+                    style={filterIconButtonStyle}
+                    title={graphFiltersOpen ? "Collapse filters" : "Expand filters"}
+                  >
+                    {graphFiltersOpen ? "−" : "+"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearGraphFilters}
+                  style={{
+                    background: "transparent",
+                    color: "#94a3b8",
+                    border: "none",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                  }}
+                >
+                  Clear
+                  </button>
+                </div>
+              </div>
+
+              {graphFiltersOpen && (
+                <>
+              <input
+                value={transactionSearch}
+                onChange={(event) =>
+                  setTransactionSearch(event.target.value)
+                }
+                placeholder="Transaction hash"
+                style={{ ...graphFilterInputStyle, marginBottom: "6px" }}
+              />
+
+              <select
+                value={assetFilter}
+                onChange={(event) => setAssetFilter(event.target.value)}
+                style={{ ...graphFilterInputStyle, marginBottom: "6px" }}
+              >
+                <option value="all">All assets</option>
+                {availableAssets.map((asset) => (
+                  <option key={asset} value={asset}>
+                    {asset}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={directionFilter}
+                onChange={(event) =>
+                  setDirectionFilter(event.target.value)
+                }
+                style={{ ...graphFilterInputStyle, marginBottom: "6px" }}
+              >
+                <option value="all">All directions</option>
+                <option value="outgoing">Outgoing</option>
+                <option value="incoming">Incoming</option>
+              </select>
+
+              <div style={{ display: "flex", gap: "6px" }}>
+                <input
+                  type="number"
+                  min="0"
+                  value={minValueFilter}
+                  onChange={(event) => setMinValueFilter(event.target.value)}
+                  placeholder="Min value"
+                  style={{ ...graphFilterInputStyle, marginBottom: 0 }}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  value={maxValueFilter}
+                  onChange={(event) => setMaxValueFilter(event.target.value)}
+                  placeholder="Max value"
+                  style={{ ...graphFilterInputStyle, marginBottom: 0 }}
+                />
+              </div>
+
+              <div
+                style={{
+                  marginTop: "8px",
+                  color: "#94a3b8",
+                  fontSize: "10px",
+                }}
+              >
+                Showing {filteredEdges.length} of {edges.length} connections
+              </div>
+                </>
+              )}
+            </div>
+
+            <div
+              className="cg-graph-actions"
+              style={{
+                position: "absolute",
+                top: "16px",
+                right: "20px",
+                zIndex: 10,
               display: "flex",
               gap: "8px",
               padding: "8px",
@@ -3418,11 +3719,12 @@ function App() {
               Fit Graph
             </button>
           </div>
+          </>
         )}
 
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
+          nodes={filteredNodes}
+          edges={filteredEdges}
           fitView
           onInit={setReactFlowInstance}
           minZoom={0.2}
@@ -3440,30 +3742,230 @@ function App() {
             closeInvestigationPanel
           }
         >
-          <Background />
+        <Background />
 
-          <Controls />
+        {token && (
+          <>
+            <Controls />
 
-          <MiniMap
-            nodeColor={(node) => {
-              const label =
-                String(
-                  node.data?.label ??
-                    "",
-                );
+            <MiniMap
+              nodeColor={(node) => {
+                const label =
+                  String(
+                    node.data?.label ??
+                      "",
+                  );
 
-              return label.startsWith(
-                "TARGET",
-              )
-                ? "#ef4444"
-                : "#64748b";
-            }}
-          />
-        </ReactFlow>
-      </div>
-    </main>
-  );
+                return label.startsWith(
+                  "TARGET",
+                )
+                  ? "#ef4444"
+                  : "#64748b";
+              }}
+            />
+          </>
+        )}
+      </ReactFlow>
+    </div>
+  </main>
+);
 }
+
+
+const responsiveCss = `
+  * { box-sizing: border-box; }
+  html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+  button, input, select, textarea { font: inherit; }
+
+  .cg-header {
+    height: 58px !important;
+    padding: 0 16px !important;
+  }
+  .cg-header h1 { font-size: 18px !important; }
+  .cg-header > div:first-child { min-width: 0; }
+
+  .cg-sidebar {
+    top: 68px !important;
+    left: 12px !important;
+    width: 310px !important;
+    max-height: calc(100vh - 80px) !important;
+    padding: 12px !important;
+    border-radius: 12px !important;
+    font-size: 11px !important;
+  }
+  .cg-sidebar h3 { font-size: 14px !important; }
+  .cg-sidebar input,
+  .cg-sidebar select,
+  .cg-sidebar textarea {
+    padding: 8px !important;
+    font-size: 11px !important;
+  }
+  .cg-sidebar label {
+    font-size: 10px !important;
+    margin-top: 8px !important;
+    margin-bottom: 4px !important;
+  }
+  .cg-sidebar button {
+    font-size: 10px !important;
+  }
+
+  .cg-investigation {
+    top: 68px !important;
+    right: 12px !important;
+    width: 320px !important;
+    max-height: calc(100vh - 80px) !important;
+    padding: 12px !important;
+    border-radius: 12px !important;
+  }
+  .cg-investigation h3 { font-size: 15px !important; }
+  .cg-investigation h4 { font-size: 12px !important; }
+
+  .cg-filter {
+    top: 12px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    width: 290px !important;
+    padding: 10px !important;
+    border-radius: 10px !important;
+  }
+
+  .cg-graph-actions {
+    top: 12px !important;
+    right: 12px !important;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px !important;
+    padding: 6px !important;
+    max-width: 230px !important;
+  }
+  .cg-graph-actions button {
+    padding: 6px 8px !important;
+    font-size: 10px !important;
+    white-space: nowrap !important;
+  }
+
+  .cg-graph {
+    height: calc(100vh - 58px) !important;
+  }
+
+  @media (max-width: 1150px) {
+    .cg-sidebar { width: 270px !important; }
+    .cg-filter { left: 54% !important; }
+    .cg-investigation { width: 290px !important; }
+  }
+
+  @media (max-width: 850px) {
+    .cg-sidebar { width: 250px !important; left: 8px !important; }
+    .cg-filter {
+      left: auto !important;
+      right: 8px !important;
+      transform: none !important;
+      width: 260px !important;
+    }
+    .cg-investigation {
+      left: 268px !important;
+      right: 8px !important;
+      width: auto !important;
+      max-height: 46vh !important;
+      top: auto !important;
+      bottom: 8px !important;
+    }
+    .cg-graph-actions { top: 72px !important; right: 8px !important; }
+  }
+
+  @media (max-width: 650px) {
+    .cg-sidebar {
+      width: calc(100vw - 16px) !important;
+      left: 8px !important;
+      max-height: 42vh !important;
+    }
+    .cg-filter {
+      left: 8px !important;
+      right: 8px !important;
+      width: auto !important;
+      transform: none !important;
+      top: 52px !important;
+    }
+    .cg-graph-actions {
+      top: 8px !important;
+      right: 8px !important;
+      max-width: 190px !important;
+    }
+    .cg-investigation {
+      left: 8px !important;
+      right: 8px !important;
+      bottom: 8px !important;
+      max-height: 42vh !important;
+    }
+  }
+`;
+
+const workspaceToggleButtonStyle: React.CSSProperties = {
+  background: "#202636",
+  color: "#cbd5e1",
+  border: "1px solid #39445a",
+  borderRadius: "6px",
+  padding: "7px 9px",
+  cursor: "pointer",
+  fontSize: "11px",
+  fontWeight: 600,
+};
+
+const investigationTabsStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: "4px",
+  padding: "3px",
+  marginBottom: "10px",
+  background: "#0f1117",
+  border: "1px solid #2f3545",
+  borderRadius: "7px",
+};
+
+const investigationTabStyle = (active: boolean): React.CSSProperties => ({
+  border: "none",
+  borderRadius: "5px",
+  padding: "7px 8px",
+  cursor: "pointer",
+  background: active ? "#2563eb" : "transparent",
+  color: active ? "#ffffff" : "#94a3b8",
+  fontSize: "10px",
+  fontWeight: 700,
+});
+
+const filterCountBadgeStyle: React.CSSProperties = {
+  padding: "2px 6px",
+  borderRadius: "999px",
+  background: "#202a3d",
+  color: "#93c5fd",
+  fontSize: "9px",
+  fontWeight: 700,
+};
+
+const filterIconButtonStyle: React.CSSProperties = {
+  width: "22px",
+  height: "22px",
+  padding: 0,
+  border: "1px solid #3b4254",
+  borderRadius: "5px",
+  background: "#202636",
+  color: "#cbd5e1",
+  cursor: "pointer",
+  fontSize: "14px",
+  lineHeight: 1,
+};
+
+const graphFilterInputStyle = {
+  width: "100%",
+  boxSizing: "border-box" as const,
+  padding: "7px 8px",
+  background: "#0f1117",
+  color: "#ffffff",
+  border: "1px solid #3b4254",
+  borderRadius: "5px",
+  outline: "none",
+  fontSize: "10px",
+};
 
 const graphControlButtonStyle = {
   background: "#272d3a",
