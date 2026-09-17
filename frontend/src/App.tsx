@@ -6,8 +6,10 @@ import {
   Controls,
   MiniMap,
   ReactFlow,
+  applyNodeChanges,
   type Edge,
   type Node,
+  type NodeChange,
 } from "@xyflow/react";
 
 import "@xyflow/react/dist/style.css";
@@ -121,19 +123,6 @@ type WalletTransaction = {
   hop_count: number;
 };
 
-type TransactionDetails = {
-  transaction_hash: string;
-  from_address: string;
-  to_address: string;
-  chain: string;
-  asset: string | null;
-  value: number | null;
-  category: string | null;
-  block_number: number | null;
-  timestamp: string | null;
-  contract_address: string | null;
-};
-
 const API_URL = import.meta.env.VITE_API_URL;
 
 function App() {
@@ -239,12 +228,6 @@ function App() {
 
   const [selectedTransfer, setSelectedTransfer] =
     useState<WalletTransaction | null>(null);
-
-  const [transactionDetails, setTransactionDetails] =
-    useState<TransactionDetails | null>(null);
-
-  const [transactionLoading, setTransactionLoading] =
-    useState(false);
 
   /* =========================
      LOADING / ERROR
@@ -537,7 +520,6 @@ function App() {
 
     setSelectedWallet(null);
     setSelectedTransfer(null);
-    setTransactionDetails(null);
 
     setError(null);
   }
@@ -1246,6 +1228,16 @@ function App() {
   }
 
   /* =========================
+     NODE POSITION CHANGES
+  ========================= */
+
+  function handleNodesChange(changes: NodeChange[]) {
+    setNodes((currentNodes) =>
+      applyNodeChanges(changes, currentNodes),
+    );
+  }
+
+  /* =========================
      NODE CLICK
   ========================= */
 
@@ -1254,7 +1246,6 @@ function App() {
     node: Node,
   ) {
     setSelectedTransfer(null);
-    setTransactionDetails(null);
     setSelectedWallet(node.id);
   }
 
@@ -1262,11 +1253,11 @@ function App() {
      EDGE CLICK
   ========================= */
 
-  async function handleEdgeClick(
+  function handleEdgeClick(
     _event: MouseEvent,
     edge: Edge,
   ) {
-    if (!trace || !token) {
+    if (!trace) {
       return;
     }
 
@@ -1277,63 +1268,12 @@ function App() {
         edge.target,
       );
 
-    if (!matchingTransfer) {
-      return;
-    }
+    if (matchingTransfer) {
+      setSelectedWallet(null);
 
-    setSelectedWallet(null);
-    setSelectedTransfer(matchingTransfer);
-    setTransactionDetails(null);
-    setTransactionLoading(true);
-    setError(null);
-
-    try {
-      const transactionHash =
-        matchingTransfer.transfer.transaction_hash;
-
-      const response = await fetch(
-        `${API_URL}/wallets/transaction/${encodeURIComponent(transactionHash)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
+      setSelectedTransfer(
+        matchingTransfer,
       );
-
-      if (response.status === 401) {
-        localStorage.removeItem(
-          "access_token",
-        );
-
-        setToken(null);
-
-        throw new Error(
-          "Session expired. Please login again.",
-        );
-      }
-
-      if (!response.ok) {
-        const message =
-          await response.text();
-
-        throw new Error(
-          message ||
-            `Transaction API returned ${response.status}`,
-        );
-      }
-
-      const data: TransactionDetails =
-        await response.json();
-
-      setTransactionDetails(data);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to load transaction details",
-      );
-    } finally {
-      setTransactionLoading(false);
     }
   }
 
@@ -1344,7 +1284,6 @@ function App() {
   function closeInvestigationPanel() {
     setSelectedWallet(null);
     setSelectedTransfer(null);
-    setTransactionDetails(null);
   }
 
   const selectedWalletTransactions =
@@ -3059,22 +2998,11 @@ function App() {
                   }}
                 >
                   {
-                    transactionDetails?.transaction_hash ??
-                    selectedTransfer.transfer.transaction_hash
+                    selectedTransfer
+                      .transfer
+                      .transaction_hash
                   }
                 </div>
-
-                {transactionLoading && (
-                  <div
-                    style={{
-                      marginTop: "7px",
-                      fontSize: "10px",
-                      color: "#94a3b8",
-                    }}
-                  >
-                    Loading full transaction details...
-                  </div>
-                )}
               </div>
 
               <div
@@ -3104,7 +3032,6 @@ function App() {
                     }}
                   >
                     {
-                      transactionDetails?.from_address ??
                       selectedTransfer.source
                     }
                   </strong>
@@ -3132,7 +3059,6 @@ function App() {
                     }}
                   >
                     {
-                      transactionDetails?.to_address ??
                       selectedTransfer.target
                     }
                   </strong>
@@ -3149,8 +3075,9 @@ function App() {
 
                   <strong>
                     {
-                      transactionDetails?.asset ??
-                      selectedTransfer.transfer.asset ??
+                      selectedTransfer
+                        .transfer
+                        .asset ??
                       "Unknown"
                     }
                   </strong>
@@ -3167,16 +3094,14 @@ function App() {
 
                   <strong>
                     {
-                      (transactionDetails?.value ??
-                        selectedTransfer.transfer.value) !==
-                      null &&
-                      (transactionDetails?.value ??
-                        selectedTransfer.transfer.value) !==
-                      undefined
+                      selectedTransfer
+                        .transfer
+                        .value !==
+                      null
                         ? formatNumber(
-                            transactionDetails?.value ??
-                            selectedTransfer.transfer.value ??
-                            0,
+                            selectedTransfer
+                              .transfer
+                              .value,
                           )
                         : "Unknown"
                     }
@@ -3194,8 +3119,9 @@ function App() {
 
                   <strong>
                     {
-                      transactionDetails?.category ??
-                      selectedTransfer.transfer.category ??
+                      selectedTransfer
+                        .transfer
+                        .category ??
                       "Unknown"
                     }
                   </strong>
@@ -3212,8 +3138,9 @@ function App() {
 
                   <strong>
                     {
-                      transactionDetails?.block_number ??
-                      selectedTransfer.transfer.block_number ??
+                      selectedTransfer
+                        .transfer
+                        .block_number ??
                       "Unknown"
                     }
                   </strong>
@@ -3260,8 +3187,9 @@ function App() {
                   }}
                 >
                   {
-                    transactionDetails?.timestamp ??
-                    selectedTransfer.transfer.timestamp ??
+                    selectedTransfer
+                      .transfer
+                      .timestamp ??
                     "Unknown"
                   }
                 </div>
@@ -3294,8 +3222,9 @@ function App() {
                   }}
                 >
                   {
-                    transactionDetails?.contract_address ??
-                    selectedTransfer.transfer.contract_address ??
+                    selectedTransfer
+                      .transfer
+                      .contract_address ??
                     "Native transfer / Unknown"
                   }
                 </div>
@@ -3353,6 +3282,9 @@ function App() {
           fitView
           minZoom={0.2}
           maxZoom={2}
+          onNodesChange={
+            handleNodesChange
+          }
           onNodeClick={
             handleNodeClick
           }
