@@ -121,6 +121,19 @@ type WalletTransaction = {
   hop_count: number;
 };
 
+type TransactionDetails = {
+  transaction_hash: string;
+  from_address: string;
+  to_address: string;
+  chain: string;
+  asset: string | null;
+  value: number | null;
+  category: string | null;
+  block_number: number | null;
+  timestamp: string | null;
+  contract_address: string | null;
+};
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 function App() {
@@ -226,6 +239,12 @@ function App() {
 
   const [selectedTransfer, setSelectedTransfer] =
     useState<WalletTransaction | null>(null);
+
+  const [transactionDetails, setTransactionDetails] =
+    useState<TransactionDetails | null>(null);
+
+  const [transactionLoading, setTransactionLoading] =
+    useState(false);
 
   /* =========================
      LOADING / ERROR
@@ -518,6 +537,7 @@ function App() {
 
     setSelectedWallet(null);
     setSelectedTransfer(null);
+    setTransactionDetails(null);
 
     setError(null);
   }
@@ -1234,6 +1254,7 @@ function App() {
     node: Node,
   ) {
     setSelectedTransfer(null);
+    setTransactionDetails(null);
     setSelectedWallet(node.id);
   }
 
@@ -1241,11 +1262,11 @@ function App() {
      EDGE CLICK
   ========================= */
 
-  function handleEdgeClick(
+  async function handleEdgeClick(
     _event: MouseEvent,
     edge: Edge,
   ) {
-    if (!trace) {
+    if (!trace || !token) {
       return;
     }
 
@@ -1256,12 +1277,63 @@ function App() {
         edge.target,
       );
 
-    if (matchingTransfer) {
-      setSelectedWallet(null);
+    if (!matchingTransfer) {
+      return;
+    }
 
-      setSelectedTransfer(
-        matchingTransfer,
+    setSelectedWallet(null);
+    setSelectedTransfer(matchingTransfer);
+    setTransactionDetails(null);
+    setTransactionLoading(true);
+    setError(null);
+
+    try {
+      const transactionHash =
+        matchingTransfer.transfer.transaction_hash;
+
+      const response = await fetch(
+        `${API_URL}/wallets/transaction/${encodeURIComponent(transactionHash)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
       );
+
+      if (response.status === 401) {
+        localStorage.removeItem(
+          "access_token",
+        );
+
+        setToken(null);
+
+        throw new Error(
+          "Session expired. Please login again.",
+        );
+      }
+
+      if (!response.ok) {
+        const message =
+          await response.text();
+
+        throw new Error(
+          message ||
+            `Transaction API returned ${response.status}`,
+        );
+      }
+
+      const data: TransactionDetails =
+        await response.json();
+
+      setTransactionDetails(data);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load transaction details",
+      );
+    } finally {
+      setTransactionLoading(false);
     }
   }
 
@@ -1272,6 +1344,7 @@ function App() {
   function closeInvestigationPanel() {
     setSelectedWallet(null);
     setSelectedTransfer(null);
+    setTransactionDetails(null);
   }
 
   const selectedWalletTransactions =
@@ -2986,11 +3059,22 @@ function App() {
                   }}
                 >
                   {
-                    selectedTransfer
-                      .transfer
-                      .transaction_hash
+                    transactionDetails?.transaction_hash ??
+                    selectedTransfer.transfer.transaction_hash
                   }
                 </div>
+
+                {transactionLoading && (
+                  <div
+                    style={{
+                      marginTop: "7px",
+                      fontSize: "10px",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    Loading full transaction details...
+                  </div>
+                )}
               </div>
 
               <div
@@ -3020,6 +3104,7 @@ function App() {
                     }}
                   >
                     {
+                      transactionDetails?.from_address ??
                       selectedTransfer.source
                     }
                   </strong>
@@ -3047,6 +3132,7 @@ function App() {
                     }}
                   >
                     {
+                      transactionDetails?.to_address ??
                       selectedTransfer.target
                     }
                   </strong>
@@ -3063,9 +3149,8 @@ function App() {
 
                   <strong>
                     {
-                      selectedTransfer
-                        .transfer
-                        .asset ??
+                      transactionDetails?.asset ??
+                      selectedTransfer.transfer.asset ??
                       "Unknown"
                     }
                   </strong>
@@ -3082,14 +3167,16 @@ function App() {
 
                   <strong>
                     {
-                      selectedTransfer
-                        .transfer
-                        .value !==
-                      null
+                      (transactionDetails?.value ??
+                        selectedTransfer.transfer.value) !==
+                      null &&
+                      (transactionDetails?.value ??
+                        selectedTransfer.transfer.value) !==
+                      undefined
                         ? formatNumber(
-                            selectedTransfer
-                              .transfer
-                              .value,
+                            transactionDetails?.value ??
+                            selectedTransfer.transfer.value ??
+                            0,
                           )
                         : "Unknown"
                     }
@@ -3107,9 +3194,8 @@ function App() {
 
                   <strong>
                     {
-                      selectedTransfer
-                        .transfer
-                        .category ??
+                      transactionDetails?.category ??
+                      selectedTransfer.transfer.category ??
                       "Unknown"
                     }
                   </strong>
@@ -3126,9 +3212,8 @@ function App() {
 
                   <strong>
                     {
-                      selectedTransfer
-                        .transfer
-                        .block_number ??
+                      transactionDetails?.block_number ??
+                      selectedTransfer.transfer.block_number ??
                       "Unknown"
                     }
                   </strong>
@@ -3175,9 +3260,8 @@ function App() {
                   }}
                 >
                   {
-                    selectedTransfer
-                      .transfer
-                      .timestamp ??
+                    transactionDetails?.timestamp ??
+                    selectedTransfer.transfer.timestamp ??
                     "Unknown"
                   }
                 </div>
@@ -3210,9 +3294,8 @@ function App() {
                   }}
                 >
                   {
-                    selectedTransfer
-                      .transfer
-                      .contract_address ??
+                    transactionDetails?.contract_address ??
+                    selectedTransfer.transfer.contract_address ??
                     "Native transfer / Unknown"
                   }
                 </div>
