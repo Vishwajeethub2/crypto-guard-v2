@@ -219,6 +219,9 @@ function App() {
   const [edges, setEdges] =
     useState<Edge[]>([]);
 
+  const [graphRisk, setGraphRisk] =
+    useState<Record<string, RiskResponse>>({});
+
   /* =========================
      INVESTIGATION STATE
   ========================= */
@@ -517,6 +520,7 @@ function App() {
 
     setNodes([]);
     setEdges([]);
+    setGraphRisk({});
 
     setSelectedWallet(null);
     setSelectedTransfer(null);
@@ -950,6 +954,7 @@ function App() {
     setError(null);
 
     setRisk(null);
+    setGraphRisk({});
     setSelectedWallet(null);
     setSelectedTransfer(null);
 
@@ -1010,6 +1015,61 @@ function App() {
           walletAddresses,
         );
 
+      /* =========================
+         LOAD RISK FOR GRAPH NODES
+         Uses the backend risk service.
+         No direct Alchemy calls here.
+      ========================= */
+
+      const graphRiskEntries =
+        await Promise.all(
+          walletList.map(
+            async (wallet) => {
+              try {
+                const riskResponse =
+                  await fetch(
+                    `${API_URL}/wallets/risk/${encodeURIComponent(wallet)}?chain=${encodeURIComponent(chain)}&max_hops=2`,
+                    {
+                      headers: {
+                        Authorization: `Bearer ${token}`,
+                      },
+                    },
+                  );
+
+                if (!riskResponse.ok) {
+                  return null;
+                }
+
+                const walletRisk: RiskResponse =
+                  await riskResponse.json();
+
+                return [
+                  wallet.toLowerCase(),
+                  walletRisk,
+                ] as const;
+              } catch {
+                return null;
+              }
+            },
+          ),
+        );
+
+      const nextGraphRisk: Record<
+        string,
+        RiskResponse
+      > = {};
+
+      graphRiskEntries.forEach(
+        (entry) => {
+          if (entry) {
+            nextGraphRisk[entry[0]] =
+              entry[1];
+          }
+        },
+      );
+
+      setGraphRisk(nextGraphRisk);
+
       const generatedNodes: Node[] =
         walletList.map(
           (
@@ -1019,6 +1079,26 @@ function App() {
             const isTarget =
               wallet.toLowerCase() ===
               data.address.toLowerCase();
+
+            const walletRisk =
+              nextGraphRisk[
+                wallet.toLowerCase()
+              ];
+
+            const riskLevel =
+              walletRisk?.risk_level;
+
+            const riskColor =
+              riskLevel
+                ? riskLevelColor(
+                    riskLevel,
+                  )
+                : "#64748b";
+
+            const riskText =
+              riskLevel
+                ? riskLevel.toUpperCase()
+                : "UNASSESSED";
 
             return {
               id: wallet,
@@ -1034,9 +1114,7 @@ function App() {
               },
 
               data: {
-                label: isTarget
-                  ? `TARGET WALLET\n${shortenAddress(wallet)}`
-                  : `WALLET\n${shortenAddress(wallet)}`,
+                label: `${isTarget ? "TARGET WALLET" : "WALLET"}\\n${shortenAddress(wallet)}\\nRISK: ${riskText}${walletRisk ? ` • ${walletRisk.risk_score}` : ""}`,
               },
 
               style: {
@@ -1044,8 +1122,8 @@ function App() {
                 borderRadius: 8,
 
                 border: isTarget
-                  ? "2px solid #ef4444"
-                  : "1px solid #64748b",
+                  ? `2px solid ${riskLevel ? riskColor : "#ef4444"}`
+                  : `2px solid ${riskColor}`,
 
                 background:
                   isTarget
@@ -2625,6 +2703,19 @@ function App() {
                       edges.length
                     }
                   </div>
+
+                  <div>
+                    <strong>
+                      Risk-assessed:
+                    </strong>{" "}
+                    {
+                      Object.keys(graphRisk).length
+                    }
+                    /
+                    {
+                      nodes.length
+                    }
+                  </div>
                 </div>
               )}
 
@@ -3307,9 +3398,23 @@ function App() {
                     "",
                 );
 
-              return label.startsWith(
-                "TARGET",
-              )
+              if (label.includes("CRITICAL")) {
+                return "#f87171";
+              }
+
+              if (label.includes("HIGH")) {
+                return "#fb923c";
+              }
+
+              if (label.includes("MODERATE")) {
+                return "#facc15";
+              }
+
+              if (label.includes("LOW")) {
+                return "#4ade80";
+              }
+
+              return label.startsWith("TARGET")
                 ? "#ef4444"
                 : "#64748b";
             }}
