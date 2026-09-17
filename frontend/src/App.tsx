@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+
 import {
   Background,
   Controls,
@@ -47,6 +48,56 @@ type TraceResponse = {
   traces: Trace[];
 };
 
+type RiskIndicator = {
+  indicator: string;
+  severity: "low" | "medium" | "high" | "critical";
+  reason: string;
+  evidence: Record<string, unknown>;
+};
+
+type RiskBehavior = {
+  address: string;
+  chain: string;
+  outgoing_connections: number;
+  incoming_connections: number;
+  total_connections: number;
+  outgoing_transaction_count: number;
+  incoming_transaction_count: number;
+  total_transaction_count: number;
+  outgoing_value: number;
+  incoming_value: number;
+  unique_assets: number;
+};
+
+type RiskExposure = {
+  risk_entity_address: string;
+  risk_entity_chain: string;
+  entity_type: string;
+  entity_name: string | null;
+  source: string | null;
+  wallets: string[];
+  transfers: TraceTransfer[];
+  hop_count: number;
+};
+
+type RiskResponse = {
+  address: string;
+  chain: string;
+  risk_score: number;
+  risk_level: "low" | "moderate" | "high" | "critical";
+  indicator_count: number;
+  exposure_count: number;
+  severity_counts: {
+    low: number;
+    medium: number;
+    high: number;
+    critical: number;
+  };
+  behavior: RiskBehavior | null;
+  indicators: RiskIndicator[];
+  exposures: RiskExposure[];
+};
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 function App() {
@@ -68,12 +119,14 @@ function App() {
   const [maxHops, setMaxHops] = useState("2");
 
   const [trace, setTrace] = useState<TraceResponse | null>(null);
+  const [risk, setRisk] = useState<RiskResponse | null>(null);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
 
   const [loginLoading, setLoginLoading] = useState(false);
   const [traceLoading, setTraceLoading] = useState(false);
+  const [riskLoading, setRiskLoading] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -114,6 +167,7 @@ function App() {
 
       if (!response.ok) {
         const message = await response.text();
+
         throw new Error(
           message || `Login failed with status ${response.status}`,
         );
@@ -135,6 +189,7 @@ function App() {
 
     setToken(null);
     setTrace(null);
+    setRisk(null);
     setNodes([]);
     setEdges([]);
     setError(null);
@@ -150,6 +205,7 @@ function App() {
 
     setTraceLoading(true);
     setError(null);
+    setRisk(null);
 
     try {
       const response = await fetch(
@@ -164,6 +220,7 @@ function App() {
       if (response.status === 401) {
         localStorage.removeItem("access_token");
         setToken(null);
+
         throw new Error("Session expired. Please login again.");
       }
 
@@ -192,30 +249,38 @@ function App() {
       const generatedNodes: Node[] = walletList.map(
         (wallet, index) => ({
           id: wallet,
+
           position: {
-            x: (index % 4) * 300,
-            y: Math.floor(index / 4) * 220,
+            x: (index % 4) * 330,
+            y: Math.floor(index / 4) * 240,
           },
+
           data: {
             label:
               wallet.toLowerCase() === data.address.toLowerCase()
                 ? `TARGET WALLET\n${wallet}`
                 : `WALLET\n${wallet}`,
           },
+
           style: {
             padding: 12,
             borderRadius: 8,
+
             border:
               wallet.toLowerCase() === data.address.toLowerCase()
                 ? "2px solid #ef4444"
                 : "1px solid #64748b",
+
             background:
               wallet.toLowerCase() === data.address.toLowerCase()
                 ? "#3f1720"
                 : "#172033",
+
             color: "#ffffff",
-            width: 220,
+            width: 240,
             fontSize: 12,
+            lineHeight: 1.5,
+            textAlign: "center",
           },
         }),
       );
@@ -231,15 +296,36 @@ function App() {
 
           generatedEdges.push({
             id: `${source}-${target}-${traceIndex}-${i}`,
+
             source,
             target,
+
             label: transfer?.asset
-              ? `${transfer.asset} ${transfer.value ?? ""}`
+              ? `${transfer.asset} ${
+                  transfer.value !== null &&
+                  transfer.value !== undefined
+                    ? transfer.value
+                    : ""
+                }`
               : "TRANSFER",
+
             animated: false,
+
             style: {
               strokeWidth: 2,
             },
+
+            labelStyle: {
+              fontSize: 10,
+              fontWeight: 600,
+            },
+
+            labelBgStyle: {
+              fill: "#ffffff",
+            },
+
+            labelBgPadding: [4, 2],
+            labelBgBorderRadius: 3,
           });
         }
       });
@@ -247,9 +333,59 @@ function App() {
       setNodes(generatedNodes);
       setEdges(generatedEdges);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Trace failed");
+      setError(
+        err instanceof Error ? err.message : "Trace failed",
+      );
     } finally {
       setTraceLoading(false);
+    }
+  }
+
+  async function handleRiskAnalysis() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    setRiskLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/wallets/risk/${address}?chain=${chain}&max_hops=${maxHops}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+
+        throw new Error(
+          message || `Risk API returned ${response.status}`,
+        );
+      }
+
+      const data: RiskResponse = await response.json();
+
+      setRisk(data);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Risk analysis failed",
+      );
+    } finally {
+      setRiskLoading(false);
     }
   }
 
@@ -277,6 +413,8 @@ function App() {
           background: "#171a23",
           borderBottom: "1px solid #2b3040",
           boxSizing: "border-box",
+          position: "relative",
+          zIndex: 50,
         }}
       >
         <div>
@@ -293,7 +431,10 @@ function App() {
             style={{
               marginTop: "5px",
               fontSize: "12px",
-              color: health?.status === "healthy" ? "#4ade80" : "#f87171",
+              color:
+                health?.status === "healthy"
+                  ? "#4ade80"
+                  : "#f87171",
             }}
           >
             Backend: {health?.status ?? "checking..."}
@@ -322,7 +463,7 @@ function App() {
         <section
           style={{
             position: "absolute",
-            zIndex: 20,
+            zIndex: 100,
             top: "100px",
             left: "50%",
             transform: "translateX(-50%)",
@@ -339,6 +480,7 @@ function App() {
             style={{
               marginTop: 0,
               marginBottom: "8px",
+              textAlign: "center",
             }}
           >
             Sign in
@@ -349,6 +491,7 @@ function App() {
               color: "#94a3b8",
               fontSize: "13px",
               marginBottom: "20px",
+              textAlign: "center",
             }}
           >
             Login to access blockchain tracing.
@@ -368,7 +511,9 @@ function App() {
             <input
               type="email"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) =>
+                setEmail(event.target.value)
+              }
               required
               style={inputStyle}
             />
@@ -387,7 +532,9 @@ function App() {
             <input
               type="password"
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) =>
+                setPassword(event.target.value)
+              }
               required
               style={inputStyle}
             />
@@ -403,15 +550,17 @@ function App() {
         </section>
       )}
 
-      {/* TRACE CONTROLS */}
+      {/* LEFT SIDEBAR */}
       {token && (
         <section
           style={{
             position: "absolute",
-            zIndex: 10,
+            zIndex: 20,
             top: "86px",
             left: "20px",
-            width: "360px",
+            width: "390px",
+            maxHeight: "calc(100vh - 106px)",
+            overflowY: "auto",
             background: "#171a23",
             border: "1px solid #2f3545",
             borderRadius: "10px",
@@ -420,20 +569,27 @@ function App() {
             boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
           }}
         >
+          {/* TRACE CONTROLS */}
           <h3
             style={{
               margin: "0 0 14px 0",
+              fontSize: "20px",
+              textAlign: "center",
             }}
           >
             Wallet Tracing
           </h3>
 
           <form onSubmit={handleTrace}>
-            <label style={labelStyle}>Wallet Address</label>
+            <label style={labelStyle}>
+              Wallet Address
+            </label>
 
             <input
               value={address}
-              onChange={(event) => setAddress(event.target.value)}
+              onChange={(event) =>
+                setAddress(event.target.value)
+              }
               style={inputStyle}
               placeholder="0x..."
               required
@@ -443,7 +599,9 @@ function App() {
 
             <select
               value={chain}
-              onChange={(event) => setChain(event.target.value)}
+              onChange={(event) =>
+                setChain(event.target.value)
+              }
               style={inputStyle}
             >
               <option value="ethereum">Ethereum</option>
@@ -453,11 +611,15 @@ function App() {
               <option value="base">Base</option>
             </select>
 
-            <label style={labelStyle}>Direction</label>
+            <label style={labelStyle}>
+              Direction
+            </label>
 
             <select
               value={direction}
-              onChange={(event) => setDirection(event.target.value)}
+              onChange={(event) =>
+                setDirection(event.target.value)
+              }
               style={inputStyle}
             >
               <option value="both">Both</option>
@@ -465,11 +627,15 @@ function App() {
               <option value="incoming">Incoming</option>
             </select>
 
-            <label style={labelStyle}>Max Hops</label>
+            <label style={labelStyle}>
+              Max Hops
+            </label>
 
             <select
               value={maxHops}
-              onChange={(event) => setMaxHops(event.target.value)}
+              onChange={(event) =>
+                setMaxHops(event.target.value)
+              }
               style={inputStyle}
             >
               <option value="1">1 Hop</option>
@@ -481,10 +647,13 @@ function App() {
               disabled={traceLoading}
               style={primaryButtonStyle}
             >
-              {traceLoading ? "Tracing..." : "Trace Wallet"}
+              {traceLoading
+                ? "Tracing..."
+                : "Trace Wallet"}
             </button>
           </form>
 
+          {/* TRACE SUMMARY */}
           {trace && (
             <div
               style={{
@@ -493,31 +662,450 @@ function App() {
                 borderTop: "1px solid #2f3545",
                 fontSize: "12px",
                 color: "#cbd5e1",
+                lineHeight: 1.8,
               }}
             >
               <div>
-                <strong>Traces:</strong> {trace.trace_count}
+                <strong>Traces:</strong>{" "}
+                {trace.trace_count}
               </div>
 
               <div>
-                <strong>Chain:</strong> {trace.chain}
+                <strong>Chain:</strong>{" "}
+                {trace.chain}
               </div>
 
               <div>
-                <strong>Direction:</strong> {trace.direction}
+                <strong>Direction:</strong>{" "}
+                {trace.direction}
               </div>
 
               <div>
-                <strong>Max hops:</strong> {trace.max_hops}
+                <strong>Max hops:</strong>{" "}
+                {trace.max_hops}
               </div>
 
               <div>
-                <strong>Wallets:</strong> {nodes.length}
+                <strong>Wallets:</strong>{" "}
+                {nodes.length}
               </div>
 
               <div>
-                <strong>Connections:</strong> {edges.length}
+                <strong>Connections:</strong>{" "}
+                {edges.length}
               </div>
+            </div>
+          )}
+
+          {/* RISK BUTTON */}
+          <button
+            type="button"
+            onClick={handleRiskAnalysis}
+            disabled={riskLoading}
+            style={riskButtonStyle}
+          >
+            {riskLoading
+              ? "Analyzing Risk..."
+              : "Analyze Risk"}
+          </button>
+
+          {/* RISK DASHBOARD */}
+          {risk && (
+            <div
+              style={{
+                marginTop: "16px",
+                paddingTop: "16px",
+                borderTop: "1px solid #2f3545",
+              }}
+            >
+              <h3
+                style={{
+                  margin: "0 0 12px 0",
+                  fontSize: "18px",
+                }}
+              >
+                Risk Analysis
+              </h3>
+
+              {/* SCORE + LEVEL */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "8px",
+                  marginBottom: "12px",
+                }}
+              >
+                <div style={statCardStyle}>
+                  <div style={smallTitleStyle}>
+                    Risk Score
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: "26px",
+                      fontWeight: 700,
+                      marginTop: "4px",
+                    }}
+                  >
+                    {risk.risk_score}
+                    <span
+                      style={{
+                        fontSize: "12px",
+                        color: "#94a3b8",
+                      }}
+                    >
+                      /100
+                    </span>
+                  </div>
+                </div>
+
+                <div style={statCardStyle}>
+                  <div style={smallTitleStyle}>
+                    Risk Level
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: "16px",
+                      fontWeight: 700,
+                      marginTop: "8px",
+                      textTransform: "uppercase",
+                      color: riskLevelColor(
+                        risk.risk_level,
+                      ),
+                    }}
+                  >
+                    {risk.risk_level}
+                  </div>
+                </div>
+              </div>
+
+              {/* COUNTS */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    "1fr 1fr 1fr",
+                  gap: "6px",
+                }}
+              >
+                <div style={miniStatStyle}>
+                  <span>Indicators</span>
+                  <strong>
+                    {risk.indicator_count}
+                  </strong>
+                </div>
+
+                <div style={miniStatStyle}>
+                  <span>Exposures</span>
+                  <strong>
+                    {risk.exposure_count}
+                  </strong>
+                </div>
+
+                <div style={miniStatStyle}>
+                  <span>Critical</span>
+                  <strong>
+                    {risk.severity_counts.critical}
+                  </strong>
+                </div>
+              </div>
+
+              {/* SEVERITY */}
+              <div
+                style={{
+                  marginTop: "12px",
+                  padding: "10px",
+                  background: "#0f1117",
+                  border: "1px solid #3b4254",
+                  borderRadius: "6px",
+                  fontSize: "12px",
+                }}
+              >
+                <div style={smallTitleStyle}>
+                  Severity Distribution
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "1fr 1fr",
+                    gap: "6px",
+                    marginTop: "8px",
+                  }}
+                >
+                  <div>
+                    Low:{" "}
+                    {risk.severity_counts.low}
+                  </div>
+
+                  <div>
+                    Medium:{" "}
+                    {risk.severity_counts.medium}
+                  </div>
+
+                  <div>
+                    High:{" "}
+                    {risk.severity_counts.high}
+                  </div>
+
+                  <div>
+                    Critical:{" "}
+                    {risk.severity_counts.critical}
+                  </div>
+                </div>
+              </div>
+
+              {/* BEHAVIOR */}
+              {risk.behavior && (
+                <div
+                  style={{
+                    marginTop: "14px",
+                    paddingTop: "12px",
+                    borderTop:
+                      "1px solid #2f3545",
+                  }}
+                >
+                  <h4
+                    style={{
+                      margin: "0 0 8px 0",
+                    }}
+                  >
+                    Wallet Behavior
+                  </h4>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "1fr 1fr",
+                      gap: "6px",
+                    }}
+                  >
+                    <div style={behaviorCardStyle}>
+                      <span>Connections</span>
+                      <strong>
+                        {
+                          risk.behavior
+                            .total_connections
+                        }
+                      </strong>
+                    </div>
+
+                    <div style={behaviorCardStyle}>
+                      <span>Transactions</span>
+                      <strong>
+                        {
+                          risk.behavior
+                            .total_transaction_count
+                        }
+                      </strong>
+                    </div>
+
+                    <div style={behaviorCardStyle}>
+                      <span>Outgoing</span>
+                      <strong>
+                        {
+                          risk.behavior
+                            .outgoing_transaction_count
+                        }
+                      </strong>
+                    </div>
+
+                    <div style={behaviorCardStyle}>
+                      <span>Incoming</span>
+                      <strong>
+                        {
+                          risk.behavior
+                            .incoming_transaction_count
+                        }
+                      </strong>
+                    </div>
+
+                    <div style={behaviorCardStyle}>
+                      <span>Unique Assets</span>
+                      <strong>
+                        {
+                          risk.behavior
+                            .unique_assets
+                        }
+                      </strong>
+                    </div>
+
+                    <div style={behaviorCardStyle}>
+                      <span>Outgoing Value</span>
+                      <strong>
+                        {risk.behavior.outgoing_value.toLocaleString()}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* INDICATORS */}
+              <div
+                style={{
+                  marginTop: "14px",
+                  paddingTop: "12px",
+                  borderTop:
+                    "1px solid #2f3545",
+                }}
+              >
+                <h4
+                  style={{
+                    margin: "0 0 8px 0",
+                  }}
+                >
+                  Risk Indicators
+                </h4>
+
+                {risk.indicators.length === 0 ? (
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    No risk indicators returned.
+                  </div>
+                ) : (
+                  risk.indicators.map(
+                    (indicator, index) => (
+                      <div
+                        key={`${indicator.indicator}-${index}`}
+                        style={{
+                          padding: "10px",
+                          marginBottom: "8px",
+                          background:
+                            "#0f1117",
+                          border:
+                            "1px solid #3b4254",
+                          borderRadius: "6px",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            fontSize: "12px",
+                          }}
+                        >
+                          {indicator.indicator}
+                        </div>
+
+                        <div
+                          style={{
+                            marginTop: "4px",
+                            fontSize: "10px",
+                            textTransform:
+                              "uppercase",
+                            color:
+                              riskSeverityColor(
+                                indicator.severity,
+                              ),
+                            fontWeight: 700,
+                          }}
+                        >
+                          {indicator.severity}
+                        </div>
+
+                        <div
+                          style={{
+                            marginTop: "6px",
+                            fontSize: "11px",
+                            color: "#cbd5e1",
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {indicator.reason}
+                        </div>
+                      </div>
+                    ),
+                  )
+                )}
+              </div>
+
+              {/* EXPOSURES */}
+              {risk.exposures.length > 0 && (
+                <div
+                  style={{
+                    marginTop: "14px",
+                    paddingTop: "12px",
+                    borderTop:
+                      "1px solid #2f3545",
+                  }}
+                >
+                  <h4
+                    style={{
+                      margin: "0 0 8px 0",
+                    }}
+                  >
+                    Risk Exposures
+                  </h4>
+
+                  {risk.exposures.map(
+                    (exposure, index) => (
+                      <div
+                        key={`${exposure.risk_entity_address}-${index}`}
+                        style={{
+                          padding: "10px",
+                          background:
+                            "#0f1117",
+                          border:
+                            "1px solid #3b4254",
+                          borderRadius: "6px",
+                          marginBottom: "8px",
+                          fontSize: "11px",
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        <div>
+                          <strong>
+                            Entity:
+                          </strong>{" "}
+                          {exposure.entity_name ??
+                            exposure.entity_type}
+                        </div>
+
+                        <div>
+                          <strong>
+                            Type:
+                          </strong>{" "}
+                          {exposure.entity_type}
+                        </div>
+
+                        <div>
+                          <strong>
+                            Hop:
+                          </strong>{" "}
+                          {exposure.hop_count}
+                        </div>
+
+                        {exposure.source && (
+                          <div>
+                            <strong>
+                              Source:
+                            </strong>{" "}
+                            {exposure.source}
+                          </div>
+                        )}
+
+                        <div
+                          style={{
+                            marginTop: "5px",
+                            color: "#94a3b8",
+                            wordBreak:
+                              "break-all",
+                          }}
+                        >
+                          {exposure.risk_entity_address}
+                        </div>
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -528,7 +1116,7 @@ function App() {
         <div
           style={{
             position: "absolute",
-            zIndex: 30,
+            zIndex: 200,
             bottom: "20px",
             left: "20px",
             right: "20px",
@@ -559,10 +1147,14 @@ function App() {
           maxZoom={2}
         >
           <Background />
+
           <Controls />
+
           <MiniMap
             nodeColor={(node) => {
-              const label = String(node.data?.label ?? "");
+              const label = String(
+                node.data?.label ?? "",
+              );
 
               return label.startsWith("TARGET")
                 ? "#ef4444"
@@ -573,6 +1165,48 @@ function App() {
       </div>
     </main>
   );
+}
+
+function riskLevelColor(
+  level: RiskResponse["risk_level"],
+) {
+  switch (level) {
+    case "critical":
+      return "#f87171";
+
+    case "high":
+      return "#fb923c";
+
+    case "moderate":
+      return "#facc15";
+
+    case "low":
+      return "#4ade80";
+
+    default:
+      return "#ffffff";
+  }
+}
+
+function riskSeverityColor(
+  severity: RiskIndicator["severity"],
+) {
+  switch (severity) {
+    case "critical":
+      return "#f87171";
+
+    case "high":
+      return "#fb923c";
+
+    case "medium":
+      return "#facc15";
+
+    case "low":
+      return "#4ade80";
+
+    default:
+      return "#cbd5e1";
+  }
 }
 
 const inputStyle: React.CSSProperties = {
@@ -605,6 +1239,54 @@ const primaryButtonStyle: React.CSSProperties = {
   borderRadius: "6px",
   cursor: "pointer",
   fontWeight: 600,
+};
+
+const riskButtonStyle: React.CSSProperties = {
+  width: "100%",
+  marginTop: "10px",
+  padding: "10px",
+  background: "#7c3aed",
+  color: "#ffffff",
+  border: "none",
+  borderRadius: "6px",
+  cursor: "pointer",
+  fontWeight: 600,
+};
+
+const statCardStyle: React.CSSProperties = {
+  padding: "12px",
+  background: "#0f1117",
+  borderRadius: "6px",
+  border: "1px solid #3b4254",
+};
+
+const miniStatStyle: React.CSSProperties = {
+  padding: "8px",
+  background: "#0f1117",
+  borderRadius: "6px",
+  border: "1px solid #3b4254",
+  display: "flex",
+  flexDirection: "column",
+  gap: "3px",
+  fontSize: "10px",
+  color: "#94a3b8",
+};
+
+const behaviorCardStyle: React.CSSProperties = {
+  padding: "8px",
+  background: "#0f1117",
+  border: "1px solid #3b4254",
+  borderRadius: "6px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "3px",
+  fontSize: "10px",
+  color: "#94a3b8",
+};
+
+const smallTitleStyle: React.CSSProperties = {
+  fontSize: "11px",
+  color: "#94a3b8",
 };
 
 export default App;
