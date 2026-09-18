@@ -439,7 +439,7 @@ def analyze_wallet_behavior(address: str, chain: str):
                     address: $address,
                     chain: $chain
                 }
-            )-[:TRANSFER]->(connected:Wallet)
+            )-[:TRANSFER {chain: $chain}]->(connected:Wallet)
             RETURN count(DISTINCT connected) AS count
             """,
             address=address,
@@ -450,7 +450,7 @@ def analyze_wallet_behavior(address: str, chain: str):
             """
             MATCH (
                 connected:Wallet
-            )-[:TRANSFER]->(
+            )-[:TRANSFER {chain: $chain}]->(
                 wallet:Wallet {
                     address: $address,
                     chain: $chain
@@ -469,7 +469,7 @@ def analyze_wallet_behavior(address: str, chain: str):
                     address: $address,
                     chain: $chain
                 }
-            )-[t:TRANSFER]->()
+            )-[t:TRANSFER {chain: $chain}]->()
             RETURN count(t) AS count,
                    coalesce(sum(t.value), 0.0) AS value
             """,
@@ -479,7 +479,7 @@ def analyze_wallet_behavior(address: str, chain: str):
 
         incoming_transaction_result = session.run(
             """
-            MATCH ()-[t:TRANSFER]->(
+            MATCH ()-[t:TRANSFER {chain: $chain}]->(
                 wallet:Wallet {
                     address: $address,
                     chain: $chain
@@ -516,7 +516,7 @@ def analyze_wallet_behavior(address: str, chain: str):
                     address: $address,
                     chain: $chain
                 }
-            )-[t:TRANSFER]-()
+            )-[t:TRANSFER {chain: $chain}]-()
             RETURN DISTINCT t.asset AS asset
             """,
             address=address,
@@ -555,45 +555,82 @@ def create_risk_entity(
     entity_type: str,
     name: str,
     source: str,
+    risk_category: str | None = None,
+    confidence: float | None = None,
+    evidence: str | None = None,
+    updated_at: str | None = None,
 ):
+    chain = chain.lower()
+
+    intelligence_id = "|".join(
+        [
+            chain,
+            address.lower(),
+            entity_type.lower(),
+            source.lower(),
+            risk_category.lower()
+            if risk_category
+            else "",
+        ]
+    )
+
     with get_neo4j_session() as session:
         result = session.run(
             """
-            MERGE (w:Wallet {
+            MERGE (entity:RiskEntity {
+                intelligence_id: $intelligence_id
+            })
+
+            SET
+                entity.address = $address,
+                entity.chain = $chain,
+                entity.entity_type = $entity_type,
+                entity.entity_name = $name,
+                entity.intelligence_source = $source,
+                entity.risk_category = $risk_category,
+                entity.confidence = $confidence,
+                entity.evidence = $evidence,
+                entity.updated_at = $updated_at
+
+            MERGE (wallet:Wallet {
                 address: $address,
                 chain: $chain
             })
 
-            SET
-                w:RiskEntity,
-                w.entity_type = $entity_type,
-                w.entity_name = $name,
-                w.intelligence_source = $source
+            MERGE (wallet)-[:EXPOSED_TO]->(entity)
 
             RETURN
-                w.address AS address,
-                w.chain AS chain,
-                w.entity_type AS entity_type,
-                w.entity_name AS name,
-                w.intelligence_source AS source
+                entity.address AS address,
+                entity.chain AS chain,
+                entity.entity_type AS entity_type,
+                entity.entity_name AS name,
+                entity.intelligence_source AS source,
+                entity.risk_category AS risk_category,
+                entity.confidence AS confidence,
+                entity.evidence AS evidence,
+                entity.updated_at AS updated_at
             """,
+            intelligence_id=intelligence_id,
             address=address,
-            chain=chain.lower(),
+            chain=chain,
             entity_type=entity_type,
             name=name,
             source=source,
+            risk_category=risk_category,
+            confidence=confidence,
+            evidence=evidence,
+            updated_at=updated_at,
         )
 
         return result.single()
-
 
 def get_risk_entity_exposure(
     address: str,
     chain: str,
     max_hops: int = 2,
 ):
-    if max_hops < 1:
-        raise ValueError("max_hops must be at least 1")
+    if max_hops < 0:
+        raise ValueError("max_hops cannot be negative")
 
     if max_hops > 2:
         raise ValueError(
@@ -603,13 +640,27 @@ def get_risk_entity_exposure(
     with get_neo4j_session() as session:
         result = session.run(
             f"""
-            MATCH path = (
+            MATCH transfer_path = (
                 source:Wallet {{
                     address: $address,
                     chain: $chain
                 }}
-            )-[:TRANSFER*1..{max_hops}]-
-            (entity:RiskEntity)
+            )-[:TRANSFER*0..{max_hops}]-
+            (wallet:Wallet)
+
+            MATCH (wallet)-[:EXPOSED_TO]->(entity:RiskEntity)
+
+            WITH
+                entity,
+                transfer_path,
+                length(transfer_path) AS hop_count
+
+            ORDER BY hop_count ASC
+
+            WITH
+                entity,
+                collect(transfer_path)[0] AS shortest_path,
+                hop_count
 
             RETURN
                 entity.address AS risk_entity_address,
@@ -617,10 +668,16 @@ def get_risk_entity_exposure(
                 entity.entity_type AS entity_type,
                 entity.entity_name AS entity_name,
                 entity.intelligence_source AS source,
+                entity.risk_category AS risk_category,
+                entity.confidence AS confidence,
+                entity.evidence AS evidence,
+                entity.updated_at AS updated_at,
 
-                [node IN nodes(path) | node.address] AS wallets,
+                [node IN nodes(shortest_path) | node.address]
+                    AS wallets,
 
-                [rel IN relationships(path) |
+                [
+                    rel IN relationships(shortest_path) |
                     {{
                         transaction_hash: rel.transaction_hash,
                         asset: rel.asset,
@@ -630,7 +687,9 @@ def get_risk_entity_exposure(
                         timestamp: rel.timestamp,
                         contract_address: rel.contract_address
                     }}
-                ] AS transfers
+                ] AS transfers,
+
+                hop_count
             """,
             address=address,
             chain=chain.lower(),
@@ -638,7 +697,22 @@ def get_risk_entity_exposure(
 
         exposures = []
 
+        seen = set()
+
         for record in result:
+            key = (
+                record["risk_entity_address"],
+                record["risk_entity_chain"],
+                record["entity_type"],
+                record["source"],
+                record["risk_category"],
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
             exposures.append(
                 {
                     "risk_entity_address": record[
@@ -650,9 +724,13 @@ def get_risk_entity_exposure(
                     "entity_type": record["entity_type"],
                     "entity_name": record["entity_name"],
                     "source": record["source"],
+                    "risk_category": record["risk_category"],
+                    "confidence": record["confidence"],
+                    "evidence": record["evidence"],
+                    "updated_at": record["updated_at"],
                     "wallets": record["wallets"],
                     "transfers": record["transfers"],
-                    "hop_count": len(record["wallets"]) - 1,
+                    "hop_count": record["hop_count"],
                 }
             )
 
@@ -688,3 +766,414 @@ def get_transaction_details(transaction_hash: str):
             return None
 
         return dict(record)
+
+def list_risk_entities(
+    chain: str | None = None,
+    entity_type: str | None = None,
+    source: str | None = None,
+    risk_category: str | None = None,
+):
+    query = """
+        MATCH (entity:RiskEntity)
+        WHERE
+            ($chain IS NULL OR entity.chain = $chain)
+            AND ($entity_type IS NULL OR entity.entity_type = $entity_type)
+            AND ($source IS NULL OR entity.intelligence_source = $source)
+            AND ($risk_category IS NULL OR entity.risk_category = $risk_category)
+
+        RETURN
+            entity.address AS address,
+            entity.chain AS chain,
+            entity.entity_type AS entity_type,
+            entity.entity_name AS name,
+            entity.intelligence_source AS source,
+            entity.risk_category AS risk_category,
+            entity.confidence AS confidence,
+            entity.evidence AS evidence,
+            entity.updated_at AS updated_at
+
+        ORDER BY entity.chain, entity.entity_type, entity.entity_name
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            chain=chain.lower() if chain else None,
+            entity_type=entity_type.lower() if entity_type else None,
+            source=source.lower() if source else None,
+            risk_category=risk_category.lower()
+            if risk_category
+            else None,
+        )
+
+        return [dict(record) for record in result]
+
+def get_risk_entity(
+    address: str,
+    chain: str,
+):
+    query = """
+        MATCH (entity:RiskEntity)
+        WHERE
+            entity.address = $address
+            AND entity.chain = $chain
+
+        RETURN
+            entity.address AS address,
+            entity.chain AS chain,
+            entity.entity_type AS entity_type,
+            entity.entity_name AS name,
+            entity.intelligence_source AS source,
+            entity.risk_category AS risk_category,
+            entity.confidence AS confidence,
+            entity.evidence AS evidence,
+            entity.updated_at AS updated_at
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+            chain=chain.lower(),
+        )
+
+        record = result.single()
+
+        if record is None:
+            return None
+
+        return dict(record)
+
+def update_risk_entity(
+    address: str,
+    chain: str,
+    entity_type: str | None = None,
+    name: str | None = None,
+    source: str | None = None,
+    risk_category: str | None = None,
+    confidence: float | None = None,
+    evidence: str | None = None,
+    updated_at: str | None = None,
+):
+    query = """
+        MATCH (entity:RiskEntity)
+        WHERE
+            entity.address = $address
+            AND entity.chain = $chain
+
+        SET
+            entity.entity_type =
+                CASE
+                    WHEN $entity_type IS NOT NULL
+                    THEN $entity_type
+                    ELSE entity.entity_type
+                END,
+
+            entity.entity_name =
+                CASE
+                    WHEN $name IS NOT NULL
+                    THEN $name
+                    ELSE entity.entity_name
+                END,
+
+            entity.intelligence_source =
+                CASE
+                    WHEN $source IS NOT NULL
+                    THEN $source
+                    ELSE entity.intelligence_source
+                END,
+
+            entity.risk_category =
+                CASE
+                    WHEN $risk_category IS NOT NULL
+                    THEN $risk_category
+                    ELSE entity.risk_category
+                END,
+
+            entity.confidence =
+                CASE
+                    WHEN $confidence IS NOT NULL
+                    THEN $confidence
+                    ELSE entity.confidence
+                END,
+
+            entity.evidence =
+                CASE
+                    WHEN $evidence IS NOT NULL
+                    THEN $evidence
+                    ELSE entity.evidence
+                END,
+
+            entity.updated_at =
+                CASE
+                    WHEN $updated_at IS NOT NULL
+                    THEN $updated_at
+                    ELSE entity.updated_at
+                END
+
+        RETURN
+            entity.address AS address,
+            entity.chain AS chain,
+            entity.entity_type AS entity_type,
+            entity.entity_name AS name,
+            entity.intelligence_source AS source,
+            entity.risk_category AS risk_category,
+            entity.confidence AS confidence,
+            entity.evidence AS evidence,
+            entity.updated_at AS updated_at
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+            chain=chain.lower(),
+            entity_type=entity_type.lower()
+            if entity_type
+            else None,
+            name=name,
+            source=source.lower()
+            if source
+            else None,
+            risk_category=risk_category.lower()
+            if risk_category
+            else None,
+            confidence=confidence,
+            evidence=evidence,
+            updated_at=updated_at,
+        )
+
+        record = result.single()
+
+        if record is None:
+            return None
+
+        return dict(record)
+
+def delete_risk_entity(
+    address: str,
+    chain: str,
+):
+    query = """
+        MATCH (entity:RiskEntity)
+        WHERE
+            entity.address = $address
+            AND entity.chain = $chain
+
+        DETACH DELETE entity
+
+        RETURN count(entity) AS deleted
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+            chain=chain.lower(),
+        )
+
+        record = result.single()
+
+        if record is None:
+            return 0
+
+        return record["deleted"]
+
+def analyze_wallet_graph(address: str, chain: str, max_hops: int = 2):
+    chain = chain.lower()
+    address = address.lower()
+
+    query = """
+    MATCH (wallet:Wallet {address: $address, chain: $chain})
+
+    OPTIONAL MATCH (wallet)-[outgoing:TRANSFER {chain: $chain}]->(outgoing_wallet:Wallet)
+    WITH wallet,
+         collect({
+             address: outgoing_wallet.address,
+             transaction_hash: outgoing.transaction_hash,
+             value: outgoing.value
+         }) AS outgoing_transfers
+
+    OPTIONAL MATCH (incoming_wallet:Wallet)-[incoming:TRANSFER {chain: $chain}]->(wallet)
+    WITH wallet,
+         outgoing_transfers,
+         collect({
+             address: incoming_wallet.address,
+             transaction_hash: incoming.transaction_hash,
+             value: incoming.value
+         }) AS incoming_transfers
+
+    RETURN
+        wallet.address AS address,
+        wallet.chain AS chain,
+        outgoing_transfers,
+        incoming_transfers
+    """
+
+    with get_neo4j_session() as session:
+        record = session.run(
+            query,
+            address=address,
+            chain=chain,
+        ).single()
+
+        if record is None:
+            return None
+
+        outgoing_transfers = [
+            item
+            for item in record["outgoing_transfers"]
+            if item["address"] is not None
+        ]
+
+        incoming_transfers = [
+            item
+            for item in record["incoming_transfers"]
+            if item["address"] is not None
+        ]
+
+        return {
+            "address": record["address"],
+            "chain": record["chain"],
+            "outgoing_transfers": outgoing_transfers,
+            "incoming_transfers": incoming_transfers,
+        }
+
+def get_multi_hop_risk_paths(
+    address: str,
+    chain: str,
+    max_hops: int = 2,
+):
+    chain = chain.lower()
+    address = address.lower()
+
+    if max_hops < 1:
+        return []
+
+    max_hops = min(max_hops, 2)
+
+    query = f"""
+    MATCH (wallet:Wallet {{address: $address, chain: $chain}})
+
+    MATCH path =
+        (wallet)-[:TRANSFER*1..{max_hops}]->(risk_wallet:Wallet)
+
+    MATCH (risk_wallet)-[:EXPOSED_TO]->(entity:RiskEntity)
+
+    WITH
+        entity,
+        path,
+        length(path) AS hop_count,
+        [node IN nodes(path) | node.address] AS wallets
+
+    RETURN
+        entity.address AS risk_entity_address,
+        entity.chain AS risk_entity_chain,
+        entity.entity_type AS entity_type,
+        entity.entity_name AS entity_name,
+        hop_count,
+        wallets,
+        [
+            relationship IN relationships(path) |
+            {{
+                transaction_hash: relationship.transaction_hash,
+                chain: relationship.chain,
+                value: relationship.value,
+                asset: relationship.asset,
+                block_number: relationship.block_number,
+                timestamp: relationship.timestamp,
+                contract_address: relationship.contract_address
+            }}
+        ] AS transfers
+
+    ORDER BY hop_count ASC
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+            chain=chain,
+        )
+
+        return [dict(record) for record in result]
+
+def get_wallet_timeline(
+    address: str,
+    chain: str,
+):
+    address = address.lower()
+    chain = chain.lower()
+
+    query = """
+    MATCH (wallet:Wallet {
+        address: $address,
+        chain: $chain
+    })
+
+    OPTIONAL MATCH (wallet)-[outgoing:TRANSFER {chain: $chain}]->(outgoing_wallet:Wallet)
+
+    WITH wallet,
+         collect({
+             transaction_hash: outgoing.transaction_hash,
+             chain: outgoing.chain,
+             direction: "outgoing",
+             counterparty: outgoing_wallet.address,
+             asset: outgoing.asset,
+             value: outgoing.value,
+             block_number: outgoing.block_number,
+             timestamp: outgoing.timestamp,
+             contract_address: outgoing.contract_address
+         }) AS outgoing_transactions
+
+    OPTIONAL MATCH (incoming_wallet:Wallet)-[incoming:TRANSFER {chain: $chain}]->(wallet)
+
+    WITH wallet,
+         outgoing_transactions,
+         collect({
+             transaction_hash: incoming.transaction_hash,
+             chain: incoming.chain,
+             direction: "incoming",
+             counterparty: incoming_wallet.address,
+             asset: incoming.asset,
+             value: incoming.value,
+             block_number: incoming.block_number,
+             timestamp: incoming.timestamp,
+             contract_address: incoming.contract_address
+         }) AS incoming_transactions
+
+    RETURN
+        wallet.address AS address,
+        wallet.chain AS chain,
+        outgoing_transactions,
+        incoming_transactions
+    """
+
+    with get_neo4j_session() as session:
+        record = session.run(
+            query,
+            address=address,
+            chain=chain,
+        ).single()
+
+        if record is None:
+            return None
+
+        outgoing_transactions = [
+            item
+            for item in record["outgoing_transactions"]
+            if item["transaction_hash"] is not None
+        ]
+
+        incoming_transactions = [
+            item
+            for item in record["incoming_transactions"]
+            if item["transaction_hash"] is not None
+        ]
+
+        return {
+            "address": record["address"],
+            "chain": record["chain"],
+            "outgoing_transactions": outgoing_transactions,
+            "incoming_transactions": incoming_transactions,
+        }

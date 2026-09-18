@@ -2,12 +2,22 @@ from app.db.neo4j import analyze_wallet_behavior
 
 
 # Development-only thresholds.
-# These are not regulatory or legal thresholds.
 HIGH_CONNECTION_THRESHOLD = 3
 HIGH_TRANSACTION_THRESHOLD = 5
 MULTI_ASSET_THRESHOLD = 3
 LARGE_OUTGOING_THRESHOLD = 100000
 HIGH_OUTGOING_RATIO_THRESHOLD = 0.80
+
+
+# Development-only intelligence severity mapping.
+# These are prototype classifications, not legal or regulatory determinations.
+INTELLIGENCE_SEVERITY = {
+    "test_flag": "low",
+    "high_risk_service": "medium",
+    "mixer": "high",
+    "known_illicit": "high",
+    "sanctions": "critical",
+}
 
 
 def generate_risk_indicators(behavior: dict):
@@ -18,7 +28,6 @@ def generate_risk_indicators(behavior: dict):
 
     outgoing_transactions = behavior["outgoing_transaction_count"]
     incoming_transactions = behavior["incoming_transaction_count"]
-
     total_transactions = behavior["total_transaction_count"]
 
     outgoing_value = float(behavior["outgoing_value"])
@@ -38,11 +47,11 @@ def generate_risk_indicators(behavior: dict):
     if outgoing_connections >= HIGH_CONNECTION_THRESHOLD:
         indicators.append(
             {
-                "indicator": "HIGH_OUTGOING_CONNECTIVITY",
+                "indicator": "high_outgoing_connectivity",
                 "severity": "medium",
                 "reason": (
-                    "Wallet interacts with a relatively high number "
-                    "of distinct outgoing counterparties."
+                    f"Wallet has {outgoing_connections} outgoing "
+                    "connections, exceeding the development threshold."
                 ),
                 "evidence": {
                     "outgoing_connections": outgoing_connections,
@@ -55,14 +64,16 @@ def generate_risk_indicators(behavior: dict):
     if total_transactions >= HIGH_TRANSACTION_THRESHOLD:
         indicators.append(
             {
-                "indicator": "HIGH_TRANSACTION_ACTIVITY",
+                "indicator": "high_transaction_activity",
                 "severity": "medium",
                 "reason": (
-                    "Wallet has a relatively high number of observed "
-                    "transfer relationships."
+                    f"Wallet has {total_transactions} observed transactions, "
+                    "exceeding the development threshold."
                 ),
                 "evidence": {
                     "total_transactions": total_transactions,
+                    "incoming_transactions": incoming_transactions,
+                    "outgoing_transactions": outgoing_transactions,
                     "threshold": HIGH_TRANSACTION_THRESHOLD,
                 },
             }
@@ -72,11 +83,11 @@ def generate_risk_indicators(behavior: dict):
     if outgoing_value >= LARGE_OUTGOING_THRESHOLD:
         indicators.append(
             {
-                "indicator": "LARGE_OUTGOING_VOLUME",
+                "indicator": "large_outgoing_volume",
                 "severity": "medium",
                 "reason": (
-                    "Observed outgoing transfer volume exceeds the "
-                    "configured development threshold."
+                    f"Wallet has observed outgoing value of "
+                    f"{outgoing_value:.2f}, exceeding the development threshold."
                 ),
                 "evidence": {
                     "outgoing_value": outgoing_value,
@@ -85,19 +96,15 @@ def generate_risk_indicators(behavior: dict):
             }
         )
 
-    # 4. Strongly outgoing-oriented activity
-    if (
-        total_value > 0
-        and outgoing_ratio >= HIGH_OUTGOING_RATIO_THRESHOLD
-        and outgoing_transactions > 0
-    ):
+    # 4. Outgoing-dominant activity
+    if total_value > 0 and outgoing_ratio >= HIGH_OUTGOING_RATIO_THRESHOLD:
         indicators.append(
             {
-                "indicator": "OUTGOING_DOMINANT_ACTIVITY",
+                "indicator": "outgoing_dominant_activity",
                 "severity": "low",
                 "reason": (
-                    "Observed transfer value is strongly concentrated "
-                    "on outgoing activity."
+                    f"{outgoing_ratio * 100:.1f}% of the observed wallet value "
+                    "is outgoing."
                 ),
                 "evidence": {
                     "outgoing_value": outgoing_value,
@@ -112,10 +119,11 @@ def generate_risk_indicators(behavior: dict):
     if unique_assets >= MULTI_ASSET_THRESHOLD:
         indicators.append(
             {
-                "indicator": "MULTIPLE_ASSET_ACTIVITY",
+                "indicator": "multiple_asset_activity",
                 "severity": "low",
                 "reason": (
-                    "Wallet has interacted with multiple distinct assets."
+                    f"Wallet has activity involving {unique_assets} "
+                    "different assets."
                 ),
                 "evidence": {
                     "unique_assets": unique_assets,
@@ -124,36 +132,36 @@ def generate_risk_indicators(behavior: dict):
             }
         )
 
-    # 6. No incoming activity
-    if incoming_transactions == 0 and outgoing_transactions > 0:
+    # 6. No observed incoming activity
+    if incoming_transactions == 0:
         indicators.append(
             {
-                "indicator": "NO_OBSERVED_INCOMING_ACTIVITY",
+                "indicator": "no_observed_incoming_activity",
                 "severity": "low",
                 "reason": (
-                    "The current dataset contains outgoing transfers "
-                    "but no observed incoming transfers."
+                    "No incoming transactions were observed in the "
+                    "currently analyzed graph data."
                 ),
                 "evidence": {
                     "incoming_transactions": incoming_transactions,
-                    "outgoing_transactions": outgoing_transactions,
+                    "incoming_value": incoming_value,
                 },
             }
         )
 
-    # 7. No outgoing activity
-    if outgoing_transactions == 0 and incoming_transactions > 0:
+    # 7. No observed outgoing activity
+    if outgoing_transactions == 0:
         indicators.append(
             {
-                "indicator": "NO_OBSERVED_OUTGOING_ACTIVITY",
+                "indicator": "no_observed_outgoing_activity",
                 "severity": "low",
                 "reason": (
-                    "The current dataset contains incoming transfers "
-                    "but no observed outgoing transfers."
+                    "No outgoing transactions were observed in the "
+                    "currently analyzed graph data."
                 ),
                 "evidence": {
-                    "incoming_transactions": incoming_transactions,
                     "outgoing_transactions": outgoing_transactions,
+                    "outgoing_value": outgoing_value,
                 },
             }
         )
@@ -161,14 +169,8 @@ def generate_risk_indicators(behavior: dict):
     return indicators
 
 
-def analyze_wallet_risk_indicators(
-    address: str,
-    chain: str,
-):
-    behavior = analyze_wallet_behavior(
-        address,
-        chain,
-    )
+def analyze_wallet_risk_indicators(address: str, chain: str):
+    behavior = analyze_wallet_behavior(address, chain)
 
     if behavior is None:
         return {
@@ -177,6 +179,12 @@ def analyze_wallet_risk_indicators(
             "behavior": None,
             "indicators": [],
             "indicator_count": 0,
+            "severity_counts": {
+                "low": 0,
+                "medium": 0,
+                "high": 0,
+                "critical": 0,
+            },
         }
 
     indicators = generate_risk_indicators(behavior)

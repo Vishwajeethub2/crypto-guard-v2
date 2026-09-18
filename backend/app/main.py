@@ -2,21 +2,32 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from app.api.routes.ingestion import router as ingestion_router
 
 from app.api.routes.cases import router as cases_router
+from app.api.routes.ingestion import router as ingestion_router
+from app.api.routes.intelligence import router as intelligence_router
 from app.api.routes.users import router as users_router
+from app.api.routes.wallets import router as wallets_router
+from app.api.routes import notes
 from app.core.config import settings
 from app.db.session import get_db
-from app.api.routes.wallets import router as wallets_router
+from app.api.routes import evidence
+from app.api.routes import bookmarks
+from app.api.routes import reports
 
 
 app = FastAPI(title=settings.app_name)
+
 
 app.include_router(users_router)
 app.include_router(cases_router)
 app.include_router(wallets_router)
 app.include_router(ingestion_router)
+app.include_router(intelligence_router)
+app.include_router(notes.router)
+app.include_router(evidence.router)
+app.include_router(bookmarks.router)
+app.include_router(reports.router)
 
 
 app.add_middleware(
@@ -50,4 +61,7 @@ async def health():
 @app.get("/health/db")
 def database_health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
-    return {"status": "database connected"}
+
+    return {
+        "status": "database connected"
+    }

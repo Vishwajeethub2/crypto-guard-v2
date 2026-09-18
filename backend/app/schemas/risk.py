@@ -68,9 +68,13 @@ class RiskExposureResponse(BaseModel):
     entity_name: str | None = None
     source: str | None = None
 
+    risk_category: str | None = None
+    confidence: float | None = None
+    evidence: str | None = None
+    updated_at: str | None = None
+
     wallets: list[str]
     transfers: list[RiskTransferEvidence]
-
     hop_count: int
 
 
@@ -94,4 +98,20 @@ class WalletRiskAnalysisResponse(BaseModel):
 
     indicators: list[RiskIndicatorResponse]
 
+    exposures: list[RiskExposureResponse]
+
+class AdvancedRiskFactorResponse(BaseModel):
+    factor: str
+    contribution: int
+    reason: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdvancedRiskResponse(BaseModel):
+    address: str
+    chain: str
+    risk_score: int = Field(ge=0, le=100)
+    risk_level: RiskLevel
+    factors: list[AdvancedRiskFactorResponse]
+    behavior: WalletBehaviorResponse | None = None
     exposures: list[RiskExposureResponse]
