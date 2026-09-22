@@ -1,0 +1,3 @@
+address,chain,entity_type,entity_name,intelligence_source,risk_category,confidence,evidence
+0x71660c4005BA85c37ccec55d0C4493E66Fe775d3,ethereum,vasp,Coinbase,Etherscan,centralized_exchange,0.95,"Etherscan identifies this address as Coinbase 1 and categorizes it as Coinbase / Exchange / Fiat Gateway / API."
+0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE,ethereum,vasp,Binance,Etherscan,centralized_exchange,0.95,"Etherscan identifies this address as Binance and categorizes it as Exchange / Binance / API."

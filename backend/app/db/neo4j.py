@@ -274,9 +274,9 @@ def trace_wallet(
     if max_hops < 1:
         raise ValueError("max_hops must be at least 1")
 
-    if max_hops > 2:
+    if max_hops > 5:
         raise ValueError(
-            "max_hops cannot exceed 2 for the current implementation"
+            "max_hops cannot exceed 5 for the current implementation"
         )
 
     if direction == "outgoing":
@@ -289,6 +289,13 @@ def trace_wallet(
         )-[:TRANSFER*1..{max_hops}]->(target:Wallet)
 
         WHERE target.address <> source.address
+          AND ALL(
+              node IN nodes(path)
+              WHERE SINGLE(
+                  other IN nodes(path)
+                  WHERE other.address = node.address
+              )
+          )
 
         RETURN
             [node IN nodes(path) | node.address] AS wallets,
@@ -316,6 +323,13 @@ def trace_wallet(
         )<-[:TRANSFER*1..{max_hops}]-(target:Wallet)
 
         WHERE target.address <> source.address
+          AND ALL(
+              node IN nodes(path)
+              WHERE SINGLE(
+                  other IN nodes(path)
+                  WHERE other.address = node.address
+              )
+          )
 
         RETURN
             [node IN nodes(path) | node.address] AS wallets,
@@ -343,6 +357,13 @@ def trace_wallet(
         )-[:TRANSFER*1..{max_hops}]-(target:Wallet)
 
         WHERE target.address <> source.address
+          AND ALL(
+              node IN nodes(path)
+              WHERE SINGLE(
+                  other IN nodes(path)
+                  WHERE other.address = node.address
+              )
+          )
 
         RETURN
             [node IN nodes(path) | node.address] AS wallets,
@@ -370,6 +391,8 @@ def trace_wallet(
         traces = []
 
         for record in result:
+            if len(traces) >= 500:
+                break
             traces.append(
                 {
                     "wallets": record["wallets"],
@@ -1177,3 +1200,9 @@ def get_wallet_timeline(
             "outgoing_transactions": outgoing_transactions,
             "incoming_transactions": incoming_transactions,
         }
+
+
+
+
+
+

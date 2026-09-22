@@ -6,6 +6,7 @@ from app.db.neo4j import (
 from app.services.blockchain import (
     build_graph_transactions,
     get_address_transfers,
+    get_address_transfers_live,
     get_saved_parsed_transfers,
     parse_transfer_data,
     validate_wallet_address,
@@ -344,4 +345,111 @@ def ingest_live_transfers(
         ),
         "ingested_count": ingested_count,
         "invalid_records": invalid_transactions,
+    }
+
+
+def ingest_live_transfers_bidirectional(
+    chain: str,
+    address: str,
+    max_count: int = 10,
+):
+    """
+    Fetch a bounded set of real incoming and outgoing transfers
+    from Alchemy and persist only valid, non-duplicate transactions
+    into Neo4j.
+
+    This is the advanced live-tracing ingestion path.
+    The existing ingest_live_transfers() function remains unchanged.
+    """
+
+    chain = chain.lower()
+
+    if not validate_wallet_address(address):
+        raise ValueError("Invalid wallet address")
+
+    if max_count < 1 or max_count > 100:
+        raise ValueError(
+            "max_count must be between 1 and 100"
+        )
+
+    alchemy_response = get_address_transfers_live(
+        chain=chain,
+        address=address,
+        direction="both",
+        max_count=max_count,
+    )
+
+    raw_transfers = alchemy_response["transfers"]
+
+    parsed_transfers = parse_transfer_data(
+        raw_transfers
+    )
+
+    for transfer in parsed_transfers:
+        transfer["chain"] = chain
+
+    graph_transactions = build_graph_transactions(
+        parsed_transfers
+    )
+
+    valid_transactions = []
+    invalid_transactions = []
+
+    for transaction in graph_transactions:
+        is_valid, reason = validate_graph_transaction(
+            transaction
+        )
+
+        if is_valid:
+            valid_transactions.append(
+                transaction
+            )
+        else:
+            invalid_transactions.append(
+                {
+                    "transaction_hash": transaction.get(
+                        "transaction_hash"
+                    ),
+                    "reason": reason,
+                }
+            )
+
+    existing_keys = get_existing_transaction_keys(
+        valid_transactions
+    )
+
+    new_transactions = [
+        transaction
+        for transaction in valid_transactions
+        if (
+            transaction.get(
+                "chain",
+                "ethereum",
+            ).lower(),
+            transaction["transaction_hash"],
+        )
+        not in existing_keys
+    ]
+
+    if new_transactions:
+        result = ingest_transfer_batch(
+            new_transactions
+        )
+        ingested_count = result["ingested_count"]
+    else:
+        ingested_count = 0
+
+    return {
+        "chain": chain,
+        "source": "alchemy",
+        "address": address,
+        "direction": "both",
+        "total_found": len(raw_transfers),
+        "normalized_count": len(graph_transactions),
+        "valid_count": len(valid_transactions),
+        "invalid_count": len(invalid_transactions),
+        "new_count": len(new_transactions),
+        "duplicate_count": len(existing_keys),
+        "ingested_count": ingested_count,
+        "invalid_transactions": invalid_transactions,
     }

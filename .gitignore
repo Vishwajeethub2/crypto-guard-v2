@@ -32,3 +32,18 @@ Thumbs.db
 
 # Logs
 docker-compose.yml
+# Frontend build
+frontend/node_modules/
+frontend/dist/
+
+# Project backups / archives
+*_backup_*.py
+*.zip
+backend/data/vasp_addresses_backup.csv
+
+# Large ML datasets - kept locally, not stored in Git
+ml/datasets/raw/elliptic_plus_plus/actors/wallets_features.csv
+ml/datasets/processed/elliptic_plus_plus/elliptic_behavioral.csv
+ml/datasets/processed/elliptic_plus_plus/elliptic_behavioral_reduced.csv
+ml/datasets/processed/elliptic_plus_plus/elliptic_behavioral_temporal.csv
+ml/datasets/processed/elliptic_plus_plus/elliptic_wallet_validation.csv

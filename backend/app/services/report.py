@@ -610,6 +610,9 @@ def generate_investigation_report(
             "graph": {...},
             "timeline": {...},
             "intelligence": {...},
+            "ml": {...},
+            "aml": {...},
+            "vasp_attribution": {...},
         }
 
     The report generator also accepts nested/aliased
@@ -2429,12 +2432,309 @@ def generate_investigation_report(
         )
 
     # =====================================================
-    # 9. INTELLIGENCE EXPOSURE
+    # 9. ML / AML ANALYSIS
     # =====================================================
 
     story.append(
         Paragraph(
-            "9. Intelligence Exposure",
+            "9. ML / AML Analysis",
+            heading_style,
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "This section records the research-stage machine-learning output "
+            "and the structured behavioral evidence assessment available for "
+            "analyst review. The ML output is not a validated real-world AML "
+            "probability and is not a definitive illicit-activity determination.",
+            body_style,
+        )
+    )
+
+    if wallet_analyses:
+        ml_aml_found = False
+
+        for analysis in wallet_analyses:
+            wallet = analysis["wallet"]
+            ml_data = analysis.get("ml")
+            aml_data = analysis.get("aml")
+
+            if not ml_data and not aml_data:
+                continue
+
+            ml_aml_found = True
+
+            story.append(
+                Paragraph(
+                    f"Wallet {wallet.id} — {wallet.address}",
+                    subheading_style,
+                )
+            )
+
+            # -------------------------------------------------
+            # ML MODEL OUTPUT
+            # -------------------------------------------------
+            if ml_data:
+                prediction = _get_value(
+                    ml_data,
+                    ("prediction",),
+                    default="N/A",
+                )
+                probability = _get_value(
+                    ml_data,
+                    ("probability",),
+                    default="N/A",
+                )
+                model_version = _get_value(
+                    ml_data,
+                    ("model_version",),
+                    default="N/A",
+                )
+                schema_version = _get_value(
+                    ml_data,
+                    ("schema_version",),
+                    default="N/A",
+                )
+                status = _get_value(
+                    ml_data,
+                    ("status",),
+                    default="N/A",
+                )
+
+                if isinstance(probability, (int, float)):
+                    probability_display = f"{float(probability) * 100:.2f}%"
+                else:
+                    probability_display = _format_cell(probability)
+
+                ml_rows = [
+                    [
+                        Paragraph("ML Output", table_header_style),
+                        Paragraph("Value", table_header_style),
+                    ],
+                    ["Prediction", _format_cell(prediction)],
+                    ["Model Output", probability_display],
+                    ["Model Version", _format_cell(model_version)],
+                    ["Schema Version", _format_cell(schema_version)],
+                    ["Status", _format_cell(status)],
+                ]
+
+                ml_table = Table(
+                    ml_rows,
+                    colWidths=[55 * mm, 105 * mm],
+                    repeatRows=1,
+                )
+                ml_table.setStyle(table_style)
+                story.append(ml_table)
+
+                features = _get_value(
+                    ml_data,
+                    ("features", "feature_values", "model_feature_values"),
+                    default={},
+                )
+                features_dict = _to_dict(features) or {}
+
+                if features_dict:
+                    story.append(Spacer(1, 7))
+                    story.append(
+                        Paragraph(
+                            "Model Features",
+                            subheading_style,
+                        )
+                    )
+
+                    feature_rows = [
+                        [
+                            Paragraph("Feature", table_header_style),
+                            Paragraph("Value", table_header_style),
+                        ]
+                    ]
+
+                    for feature_name, feature_value in features_dict.items():
+                        feature_rows.append([
+                            _paragraph_cell(feature_name, table_cell_style),
+                            _paragraph_cell(
+                                _format_number(feature_value)
+                                if isinstance(feature_value, (int, float))
+                                else feature_value,
+                                table_cell_style,
+                            ),
+                        ])
+
+                    feature_table = Table(
+                        feature_rows,
+                        colWidths=[100 * mm, 60 * mm],
+                        repeatRows=1,
+                    )
+                    feature_table.setStyle(table_style)
+                    story.append(feature_table)
+
+                notice = _get_value(
+                    ml_data,
+                    ("notice",),
+                    default="",
+                )
+                if notice:
+                    story.append(Spacer(1, 6))
+                    story.append(
+                        Paragraph(
+                            f"<b>ML Notice:</b> {_format_cell(notice)}",
+                            small_style,
+                        )
+                    )
+
+            # -------------------------------------------------
+            # AML EVIDENCE ASSESSMENT
+            # -------------------------------------------------
+            if aml_data:
+                story.append(Spacer(1, 9))
+                story.append(
+                    Paragraph(
+                        "AML Evidence Assessment",
+                        subheading_style,
+                    )
+                )
+
+                review_status = _get_value(
+                    aml_data,
+                    ("review_status",),
+                    default="N/A",
+                )
+                assessment_type = _get_value(
+                    aml_data,
+                    ("assessment_type",),
+                    default="N/A",
+                )
+                indicator_count = _get_value(
+                    aml_data,
+                    ("indicator_count",),
+                    default="N/A",
+                )
+                high_count = _get_value(
+                    aml_data,
+                    ("high_severity_indicator_count",),
+                    default="N/A",
+                )
+                medium_count = _get_value(
+                    aml_data,
+                    ("medium_severity_indicator_count",),
+                    default="N/A",
+                )
+
+                aml_rows = [
+                    [
+                        Paragraph("Assessment", table_header_style),
+                        Paragraph("Value", table_header_style),
+                    ],
+                    ["Review Status", _format_cell(review_status)],
+                    ["Assessment Type", _format_cell(assessment_type)],
+                    ["Indicator Count", _format_cell(indicator_count)],
+                    ["High Severity Indicators", _format_cell(high_count)],
+                    ["Medium Severity Indicators", _format_cell(medium_count)],
+                ]
+
+                aml_table = Table(
+                    aml_rows,
+                    colWidths=[55 * mm, 105 * mm],
+                    repeatRows=1,
+                )
+                aml_table.setStyle(table_style)
+                story.append(aml_table)
+
+                signals = _get_value(
+                    aml_data,
+                    ("signals", "indicators"),
+                    default=[],
+                )
+
+                if isinstance(signals, (list, tuple)) and signals:
+                    story.append(Spacer(1, 7))
+                    signal_rows = [
+                        [
+                            Paragraph("Source", table_header_style),
+                            Paragraph("Signal", table_header_style),
+                            Paragraph("Severity", table_header_style),
+                            Paragraph("Reason", table_header_style),
+                        ]
+                    ]
+
+                    for signal in signals:
+                        signal_dict = _to_dict(signal) or {}
+                        signal_name = _get_value(
+                            signal_dict,
+                            ("signal",),
+                            default="N/A",
+                        )
+                        source = _get_value(
+                            signal_dict,
+                            ("source",),
+                            default="N/A",
+                        )
+                        severity = _get_value(
+                            signal_dict,
+                            ("severity", "level"),
+                            default="N/A",
+                        )
+                        reason = _get_value(
+                            signal_dict,
+                            ("reason", "description"),
+                            default="",
+                        )
+
+                        signal_rows.append([
+                            _paragraph_cell(source, table_cell_style),
+                            _paragraph_cell(signal_name, table_cell_style),
+                            _paragraph_cell(severity, table_cell_style),
+                            _paragraph_cell(reason, table_cell_style),
+                        ])
+
+                    signal_table = Table(
+                        signal_rows,
+                        colWidths=[22 * mm, 38 * mm, 25 * mm, 75 * mm],
+                        repeatRows=1,
+                    )
+                    signal_table.setStyle(table_style)
+                    story.append(signal_table)
+
+                aml_notice = _get_value(
+                    aml_data,
+                    ("notice",),
+                    default="",
+                )
+                if aml_notice:
+                    story.append(Spacer(1, 6))
+                    story.append(
+                        Paragraph(
+                            f"<b>AML Notice:</b> {_format_cell(aml_notice)}",
+                            small_style,
+                        )
+                    )
+
+            story.append(Spacer(1, 10))
+
+        if not ml_aml_found:
+            story.append(
+                Paragraph(
+                    "No ML / AML analysis data was available for the analyzed wallets.",
+                    body_style,
+                )
+            )
+
+    else:
+        story.append(
+            Paragraph(
+                "No ML / AML analysis data was available.",
+                body_style,
+            )
+        )
+
+    # =====================================================
+    # 10. INTELLIGENCE EXPOSURE
+    # =====================================================
+
+    story.append(
+        Paragraph(
+            "10. Intelligence Exposure",
             heading_style,
         )
     )
@@ -2456,6 +2756,10 @@ def generate_investigation_report(
                     subheading_style,
                 )
             )
+
+            # ML / AML output is rendered in the dedicated section above.
+            # Do not append ML/AML rows to the later observation table here.
+            # This keeps observation_rows scoped to its own section.
 
             if intelligence_data:
 
@@ -2648,12 +2952,12 @@ def generate_investigation_report(
         )
 
     # =====================================================
-    # 10. INVESTIGATION SUMMARY
+    # 11. INVESTIGATION SUMMARY
     # =====================================================
 
     story.append(
         Paragraph(
-            "10. Investigation Summary",
+            "11. Investigation Summary",
             heading_style,
         )
     )
@@ -2714,6 +3018,8 @@ def generate_investigation_report(
         graph_count = 0
         timeline_count = 0
         intelligence_count = 0
+        ml_aml_count = 0
+        vasp_count = 0
 
         for analysis in wallet_analyses:
 
@@ -2740,6 +3046,12 @@ def generate_investigation_report(
                 "intelligence",
             ):
                 intelligence_count += 1
+
+            if analysis.get("ml") or analysis.get("aml"):
+                ml_aml_count += 1
+
+            if analysis.get("vasp_attribution"):
+                vasp_count += 1
 
         story.append(
             Spacer(1, 8)
@@ -2779,6 +3091,14 @@ def generate_investigation_report(
                 "Intelligence Exposure",
                 str(intelligence_count),
             ],
+            [
+                "ML / AML Analysis",
+                str(ml_aml_count),
+            ],
+            [
+                "VASP Attribution",
+                str(vasp_count),
+            ],
         ]
 
         coverage_table = Table(
@@ -2802,14 +3122,16 @@ def generate_investigation_report(
     # KEY INVESTIGATION OBSERVATIONS
     # =====================================================
 
-    if wallet_analyses:
-
-        observation_rows = [
-            [
-                Paragraph("Observation", table_header_style),
-                Paragraph("Supporting Data", table_header_style),
-            ]
+    # Initialize this before the conditional so the report generator
+    # can never reference an unbound local variable.
+    observation_rows = [
+        [
+            Paragraph("Observation", table_header_style),
+            Paragraph("Supporting Data", table_header_style),
         ]
+    ]
+
+    if wallet_analyses:
 
         for analysis in wallet_analyses:
             wallet = analysis.get("wallet")
@@ -2823,6 +3145,8 @@ def generate_investigation_report(
             graph_data = _find_section(analysis, "graph")
             timeline_data = _find_section(analysis, "timeline")
             intelligence_data = _find_section(analysis, "intelligence")
+            ml_data = analysis.get("ml")
+            aml_data = analysis.get("aml")
 
             if risk_data:
                 risk_score = _get_risk_value(
@@ -2926,6 +3250,62 @@ def generate_investigation_report(
                         ),
                     ])
 
+            if ml_data or aml_data:
+                ml_parts = []
+
+                if ml_data:
+                    ml_probability = _get_value(
+                        ml_data,
+                        ("probability",),
+                        default=None,
+                    )
+                    ml_prediction = _get_value(
+                        ml_data,
+                        ("prediction",),
+                        default=None,
+                    )
+                    if isinstance(ml_probability, (int, float)):
+                        ml_probability_text = f"{float(ml_probability) * 100:.2f}%"
+                    else:
+                        ml_probability_text = _format_cell(ml_probability)
+
+                    ml_parts.append(
+                        f"ML output: {ml_probability_text}; prediction: "
+                        f"{_format_cell(ml_prediction)}"
+                    )
+
+                if aml_data:
+                    review_status = _get_value(
+                        aml_data,
+                        ("review_status",),
+                        default=None,
+                    )
+                    indicator_count = _get_value(
+                        aml_data,
+                        ("indicator_count",),
+                        default=None,
+                    )
+                    if review_status is not None:
+                        ml_parts.append(
+                            f"AML review status: {_format_cell(review_status)}"
+                        )
+                    if indicator_count is not None:
+                        ml_parts.append(
+                            f"behavioral indicators: {_format_cell(indicator_count)}"
+                        )
+
+                if ml_parts:
+                    observation_rows.append([
+                        _paragraph_cell(
+                            f"{wallet_label} ML / AML assessment",
+                            table_cell_style,
+                        ),
+                        _paragraph_cell(
+                            "; ".join(ml_parts) + ".",
+                            table_cell_style,
+                        ),
+                    ])
+
             if intelligence_data:
                 exposures = _get_value(
                     intelligence_data,
@@ -2989,6 +3369,471 @@ def generate_investigation_report(
                 ])
             )
             story.append(observations_table)
+
+    # =====================================================
+    # 11. VASP ATTRIBUTION
+    # =====================================================
+
+    story.append(
+        Paragraph(
+            "11. VASP Attribution",
+            heading_style,
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "This section records known VASP intelligence matches "
+            "identified through transaction-connected wallet paths. "
+            "A transaction-path match does not by itself establish "
+            "ownership, control, or illicit activity.",
+            body_style,
+        )
+    )
+
+    vasp_found = False
+
+    if wallet_analyses:
+
+        for analysis in wallet_analyses:
+
+            wallet = analysis.get("wallet")
+            vasp_data = analysis.get("vasp_attribution")
+
+            if not vasp_data:
+                continue
+
+            candidates = _get_value(
+                vasp_data,
+                ("candidates",),
+                default=[],
+            )
+
+            if not isinstance(candidates, (list, tuple)):
+                candidates = []
+
+            story.append(
+                Paragraph(
+                    f"Wallet {getattr(wallet, 'id', 'N/A')} — "
+                    f"{getattr(wallet, 'address', 'N/A')}",
+                    subheading_style,
+                )
+            )
+
+            status = _get_value(
+                vasp_data,
+                ("status",),
+                default="N/A",
+            )
+
+            candidate_count = _get_value(
+                vasp_data,
+                ("candidate_count",),
+                default=len(candidates),
+            )
+
+            max_hops = _get_value(
+                vasp_data,
+                ("max_hops",),
+                default="N/A",
+            )
+
+            story.append(
+                Paragraph(
+                    f"<b>Status:</b> {_format_cell(status)} "
+                    f"&nbsp;&nbsp; "
+                    f"<b>Candidates:</b> {_format_cell(candidate_count)} "
+                    f"&nbsp;&nbsp; "
+                    f"<b>Max Hops:</b> {_format_cell(max_hops)}",
+                    body_style,
+                )
+            )
+
+            if candidates:
+
+                vasp_found = True
+
+                for candidate in candidates:
+
+                    candidate_dict = _to_dict(candidate) or {}
+
+                    name = _get_value(
+                        candidate_dict,
+                        ("name",),
+                        default="N/A",
+                    )
+                    address = _get_value(
+                        candidate_dict,
+                        ("address",),
+                        default="N/A",
+                    )
+                    chain = _get_value(
+                        candidate_dict,
+                        ("chain",),
+                        default="N/A",
+                    )
+                    confidence = _get_value(
+                        candidate_dict,
+                        ("confidence",),
+                        default=None,
+                    )
+                    hop = _get_value(
+                        candidate_dict,
+                        ("hop",),
+                        default="N/A",
+                    )
+                    basis = _get_value(
+                        candidate_dict,
+                        ("attribution_basis",),
+                        default="N/A",
+                    )
+                    source = _get_value(
+                        candidate_dict,
+                        ("source",),
+                        default="N/A",
+                    )
+                    risk_category = _get_value(
+                        candidate_dict,
+                        ("risk_category",),
+                        default="N/A",
+                    )
+                    reason = _get_value(
+                        candidate_dict,
+                        ("reason",),
+                        default="N/A",
+                    )
+                    evidence_text = _get_value(
+                        candidate_dict,
+                        ("evidence",),
+                        default="N/A",
+                    )
+
+                    if isinstance(confidence, (int, float)):
+                        confidence_display = (
+                            f"{float(confidence) * 100:.1f}%"
+                        )
+                    else:
+                        confidence_display = _format_cell(confidence)
+
+                    candidate_rows = [
+                        [
+                            Paragraph(
+                                "Field",
+                                table_header_style,
+                            ),
+                            Paragraph(
+                                "Value",
+                                table_header_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Candidate VASP",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                name,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "VASP Address",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                address,
+                                table_cell_small_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Chain",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                chain,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Confidence",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                confidence_display,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Hop Count",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                hop,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Attribution Basis",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                basis,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Intelligence Source",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                source,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Risk Category",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                risk_category,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Reason",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                reason,
+                                table_cell_style,
+                            ),
+                        ],
+                        [
+                            _paragraph_cell(
+                                "Evidence",
+                                table_cell_style,
+                            ),
+                            _paragraph_cell(
+                                evidence_text,
+                                table_cell_style,
+                            ),
+                        ],
+                    ]
+
+                    candidate_table = Table(
+                        candidate_rows,
+                        colWidths=[
+                            45 * mm,
+                            115 * mm,
+                        ],
+                        repeatRows=1,
+                    )
+                    candidate_table.setStyle(table_style)
+                    story.append(candidate_table)
+
+                    wallet_path = _get_value(
+                        candidate_dict,
+                        ("wallets",),
+                        default=[],
+                    )
+
+                    if isinstance(wallet_path, (list, tuple)) and wallet_path:
+
+                        story.append(Spacer(1, 7))
+                        story.append(
+                            Paragraph(
+                                "Wallet Path",
+                                subheading_style,
+                            )
+                        )
+
+                        path_rows = [
+                            [
+                                Paragraph(
+                                    "Hop",
+                                    table_header_style,
+                                ),
+                                Paragraph(
+                                    "Wallet Address",
+                                    table_header_style,
+                                ),
+                            ]
+                        ]
+
+                        for index, path_wallet in enumerate(wallet_path):
+                            path_rows.append(
+                                [
+                                    _format_cell(index),
+                                    _paragraph_cell(
+                                        path_wallet,
+                                        table_cell_small_style,
+                                    ),
+                                ]
+                            )
+
+                        path_table = Table(
+                            path_rows,
+                            colWidths=[
+                                20 * mm,
+                                140 * mm,
+                            ],
+                            repeatRows=1,
+                        )
+                        path_table.setStyle(table_style)
+                        story.append(path_table)
+
+                    transfers = _get_value(
+                        candidate_dict,
+                        ("transfers",),
+                        default=[],
+                    )
+
+                    if isinstance(transfers, (list, tuple)) and transfers:
+
+                        story.append(Spacer(1, 7))
+                        story.append(
+                            Paragraph(
+                                "Transaction Path Evidence",
+                                subheading_style,
+                            )
+                        )
+
+                        transfer_rows = [
+                            [
+                                Paragraph(
+                                    "Transaction Hash",
+                                    table_header_style,
+                                ),
+                                Paragraph(
+                                    "Asset / Value",
+                                    table_header_style,
+                                ),
+                                Paragraph(
+                                    "Category",
+                                    table_header_style,
+                                ),
+                                Paragraph(
+                                    "Block / Timestamp",
+                                    table_header_style,
+                                ),
+                            ]
+                        ]
+
+                        for transfer in transfers:
+
+                            transfer_dict = _to_dict(transfer) or {}
+
+                            tx_hash = _get_value(
+                                transfer_dict,
+                                ("transaction_hash",),
+                                default="N/A",
+                            )
+                            asset = _get_value(
+                                transfer_dict,
+                                ("asset",),
+                                default="N/A",
+                            )
+                            value = _get_value(
+                                transfer_dict,
+                                ("value",),
+                                default="N/A",
+                            )
+                            category = _get_value(
+                                transfer_dict,
+                                ("category",),
+                                default="N/A",
+                            )
+                            block_number = _get_value(
+                                transfer_dict,
+                                ("block_number",),
+                                default="N/A",
+                            )
+                            timestamp = _get_value(
+                                transfer_dict,
+                                ("timestamp",),
+                                default="N/A",
+                            )
+
+                            transfer_rows.append(
+                                [
+                                    _paragraph_cell(
+                                        tx_hash,
+                                        table_cell_small_style,
+                                    ),
+                                    _paragraph_cell(
+                                        f"{_format_cell(asset)} / "
+                                        f"{_format_cell(value)}",
+                                        table_cell_small_style,
+                                    ),
+                                    _paragraph_cell(
+                                        category,
+                                        table_cell_small_style,
+                                    ),
+                                    _paragraph_cell(
+                                        f"Block: {_format_cell(block_number)}; "
+                                        f"{_format_cell(timestamp)}",
+                                        table_cell_small_style,
+                                    ),
+                                ]
+                            )
+
+                        transfer_table = Table(
+                            transfer_rows,
+                            colWidths=[
+                                52 * mm,
+                                32 * mm,
+                                30 * mm,
+                                46 * mm,
+                            ],
+                            repeatRows=1,
+                        )
+                        transfer_table.setStyle(table_style)
+                        story.append(transfer_table)
+
+                    story.append(Spacer(1, 10))
+
+            else:
+
+                story.append(
+                    Paragraph(
+                        "No explicitly labelled VASP candidate was found "
+                        "within the analyzed hop limit.",
+                        body_style,
+                    )
+                )
+
+            notice = _get_value(
+                vasp_data,
+                ("notice",),
+                default="",
+            )
+
+            if notice:
+                story.append(
+                    Paragraph(
+                        f"<b>VASP Notice:</b> {_format_cell(notice)}",
+                        small_style,
+                    )
+                )
+
+            story.append(Spacer(1, 8))
+
+    if not vasp_found:
+        story.append(
+            Paragraph(
+                "No VASP attribution candidate was found for the "
+                "analyzed wallets.",
+                body_style,
+            )
+        )
 
     # =====================================================
     # INVESTIGATION NOTICE

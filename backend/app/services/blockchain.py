@@ -198,6 +198,127 @@ def get_address_transfers(
         "transfers": transfers,
     }
 
+def get_address_transfers_live(
+    chain: str,
+    address: str,
+    direction: str = "both",
+    max_count: int = 20,
+):
+    """
+    Fetch real blockchain transfer data from Alchemy for live tracing.
+
+    Supports:
+    - outgoing transfers
+    - incoming transfers
+    - both directions
+    """
+
+    chain = chain.lower()
+    direction = direction.lower()
+
+    if not validate_wallet_address(address):
+        raise ValueError("Invalid wallet address")
+
+    if direction not in {"incoming", "outgoing", "both"}:
+        raise ValueError(
+            "direction must be incoming, outgoing, or both"
+        )
+
+    if max_count < 1 or max_count > 1000:
+        raise ValueError(
+            "max_count must be between 1 and 1000"
+        )
+
+    alchemy_chain_names = {
+        "ethereum": "eth-mainnet",
+        "polygon": "polygon-mainnet",
+        "arbitrum": "arb-mainnet",
+        "optimism": "opt-mainnet",
+        "base": "base-mainnet",
+    }
+
+    if chain not in alchemy_chain_names:
+        raise ValueError(
+            f"Unsupported chain: {chain}"
+        )
+
+    url = (
+        f"https://{alchemy_chain_names[chain]}"
+        f".g.alchemy.com/v2/"
+        f"{settings.alchemy_api_key}"
+    )
+
+    categories = [
+        "external",
+        "internal",
+        "erc20",
+        "erc721",
+        "erc1155",
+    ]
+
+    def fetch_transfers(
+        address_field: str,
+    ) -> list[dict]:
+
+        params = {
+            "fromBlock": "0x0",
+            "toBlock": "latest",
+            address_field: address,
+            "category": categories,
+            "withMetadata": True,
+            "excludeZeroValue": True,
+            "maxCount": hex(max_count),
+        }
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "alchemy_getAssetTransfers",
+            "params": [params],
+        }
+
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                url,
+                json=payload,
+            )
+            response.raise_for_status()
+
+        data = response.json()
+
+        if "error" in data:
+            raise ValueError(
+                data["error"]["message"]
+            )
+
+        return data.get(
+            "result",
+            {},
+        ).get(
+            "transfers",
+            [],
+        )
+
+    transfers = []
+
+    if direction in {"outgoing", "both"}:
+        transfers.extend(
+            fetch_transfers("fromAddress")
+        )
+
+    if direction in {"incoming", "both"}:
+        transfers.extend(
+            fetch_transfers("toAddress")
+        )
+
+    return {
+        "chain": chain,
+        "address": address,
+        "direction": direction,
+        "transfer_count": len(transfers),
+        "transfers": transfers,
+    }
+
 def parse_transfer_data(transfers: list[dict]):
     parsed_transfers = []
 

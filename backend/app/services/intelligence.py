@@ -20,6 +20,7 @@ SUPPORTED_ENTITY_TYPES = {
     "mixer",
     "known_illicit",
     "sanctions",
+    "vasp",
 }
 
 

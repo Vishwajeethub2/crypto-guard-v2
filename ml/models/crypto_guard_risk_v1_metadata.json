@@ -1,0 +1,53 @@
+{
+  "model_version": "1.0",
+  "schema_version": "1.0",
+  "model_type": "RandomForestClassifier",
+  "training_dataset": "ml\\datasets\\processed\\ethereum_fraud\\crypto_guard_features_v1.csv",
+  "training_rows": 5948,
+  "validation_rows": 1488,
+  "test_rows": 1859,
+  "schema_feature_count": 30,
+  "usable_feature_count": 14,
+  "excluded_constant_features": [
+    "activity_duration_seconds",
+    "maximum_incoming_value",
+    "outgoing_value_concentration",
+    "incoming_value_concentration",
+    "counterparty_reuse_count",
+    "graph_multi_hop_exposure_count",
+    "total_transaction_fees",
+    "average_transaction_fee",
+    "minimum_transaction_fee",
+    "maximum_transaction_fee",
+    "fee_to_value_ratio",
+    "average_transaction_gap_seconds",
+    "minimum_transaction_gap_seconds",
+    "maximum_transaction_gap_seconds",
+    "transaction_burst_count",
+    "rapid_transaction_sequence_count"
+  ],
+  "random_state": 42,
+  "n_estimators": 500,
+  "class_weight": "balanced",
+  "max_features": "sqrt",
+  "validation_metrics": {
+    "accuracy": 0.8998655913978495,
+    "precision": 0.7132352941176471,
+    "recall": 0.7320754716981132,
+    "f1": 0.7225325884543762,
+    "roc_auc": 0.9423687499035777,
+    "pr_auc": 0.8052554344438982
+  },
+  "test_metrics": {
+    "accuracy": 0.9101667563206025,
+    "precision": 0.7469879518072289,
+    "recall": 0.7492447129909365,
+    "f1": 0.7481146304675717,
+    "roc_auc": 0.9496607140032584,
+    "pr_auc": 0.8536313747245371
+  },
+  "classification_threshold": 0.5,
+  "trained_at": "2026-09-20T14:20:10.470460+00:00",
+  "status": "research_candidate",
+  "warning": "This model is a research candidate trained on a labeled Ethereum wallet dataset. It is not a validated production AML probability or definitive illicit-activity determination."
+}

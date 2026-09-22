@@ -18,6 +18,7 @@ from app.services.scoring import calculate_wallet_risk
 from app.services.advanced_risk import analyze_wallet_advanced_risk
 from app.services.graph_analytics import analyze_wallet_graph_analytics
 from app.services.timeline import analyze_wallet_timeline
+from app.services.vasp_attribution import analyze_vasp_attribution
 
 from app.services.ml_features import build_ml_features
 from app.services.ml_model import get_ml_model
@@ -230,6 +231,107 @@ def analyze_case_wallet_advanced_risk(
 
 
 # ============================================================
+# ============================================================
+# VASP ATTRIBUTION
+# ============================================================
+
+@router.get(
+    "/{case_id}/wallets/{wallet_id}/vasp-attribution",
+)
+def analyze_case_wallet_vasp_attribution(
+    case_id: int,
+    wallet_id: int,
+    max_hops: int = 2,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Identify known VASP intelligence entities connected to a wallet.
+
+    This endpoint uses existing Neo4j transfer relationships and
+    known VASP intelligence records. It does not make a new
+    blockchain/Alchemy request.
+    """
+
+    # ----------------------------------------------------------
+    # Verify case ownership
+    # ----------------------------------------------------------
+
+    case = (
+        db.query(Case)
+        .filter(
+            Case.id == case_id,
+            Case.created_by == current_user.id,
+        )
+        .first()
+    )
+
+    if case is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Case not found",
+        )
+
+    # ----------------------------------------------------------
+    # Verify wallet belongs to case
+    # ----------------------------------------------------------
+
+    wallet = (
+        db.query(Wallet)
+        .filter(
+            Wallet.id == wallet_id,
+            Wallet.case_id == case_id,
+        )
+        .first()
+    )
+
+    if wallet is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Wallet not found in this case",
+        )
+
+    # ----------------------------------------------------------
+    # Validate address
+    # ----------------------------------------------------------
+
+    if not validate_wallet_address(wallet.address):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid wallet address",
+        )
+
+    # ----------------------------------------------------------
+    # Validate hop range
+    # ----------------------------------------------------------
+
+    if max_hops < 0 or max_hops > 2:
+        raise HTTPException(
+            status_code=400,
+            detail="max_hops must be between 0 and 2",
+        )
+
+    try:
+        analysis = analyze_vasp_attribution(
+            address=wallet.address,
+            chain=wallet.chain,
+            max_hops=max_hops,
+        )
+
+        return {
+            "case_id": case.id,
+            "wallet_id": wallet.id,
+            "wallet_address": wallet.address,
+            "wallet_chain": wallet.chain,
+            **analysis,
+        }
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
 # ML RISK ANALYSIS
 # ============================================================
 
@@ -770,3 +872,4 @@ def delete_case(
         "message": "Case deleted successfully",
         "case_id": case_id,
     }
+

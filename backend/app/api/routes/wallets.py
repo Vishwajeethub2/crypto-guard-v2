@@ -8,6 +8,7 @@ from app.db.wallet_model import Wallet
 from app.schemas.risk import WalletRiskAnalysisResponse
 from app.schemas.wallet import WalletCreate
 from app.services.auth import get_current_user
+from app.services.ingestion import ingest_live_transfers_bidirectional
 from app.services.blockchain import validate_wallet_address
 from app.services.scoring import calculate_wallet_risk
 
@@ -145,6 +146,7 @@ def trace_wallet_api(
     chain: str = "ethereum",
     direction: str = "both",
     max_hops: int = 2,
+    refresh_live: bool = True,
     current_user=Depends(get_current_user),
 ):
     if not validate_wallet_address(address):
@@ -154,6 +156,15 @@ def trace_wallet_api(
         )
 
     try:
+        live_refresh_result = None
+
+        if refresh_live:
+            live_refresh_result = ingest_live_transfers_bidirectional(
+                chain=chain,
+                address=address,
+                max_count=10,
+            )
+
         traces = trace_wallet(
             address=address,
             chain=chain,
@@ -166,6 +177,8 @@ def trace_wallet_api(
             "chain": chain.lower(),
             "direction": direction.lower(),
             "max_hops": max_hops,
+            "refresh_live": refresh_live,
+            "live_refresh": live_refresh_result,
             "trace_count": len(traces),
             "traces": traces,
         }

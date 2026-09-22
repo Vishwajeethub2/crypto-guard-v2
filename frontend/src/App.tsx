@@ -124,6 +124,176 @@ type WalletTransaction = {
   hop_count: number;
 };
 
+type GraphCounterparty = {
+  address: string;
+  chain: string;
+  transaction_count: number;
+  total_value: number;
+};
+
+type GraphRiskPath = {
+  risk_entity_address: string;
+  risk_entity_chain: string;
+  entity_type: string;
+  entity_name: string | null;
+  hop_count: number;
+  wallets: string[];
+  transfers: TraceTransfer[];
+};
+
+type GraphSignal = {
+  signal?: string;
+  severity?: string;
+  reason?: string;
+  evidence?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+type GraphAnalyticsResponse = {
+  address: string;
+  chain: string;
+  outgoing_connections: number;
+  incoming_connections: number;
+  outgoing_transaction_count: number;
+  incoming_transaction_count: number;
+  outgoing_value: number;
+  incoming_value: number;
+  fan_out: number;
+  fan_in: number;
+  top_outgoing_counterparties: GraphCounterparty[];
+  top_incoming_counterparties: GraphCounterparty[];
+  outgoing_concentration: number;
+  incoming_concentration: number;
+  multi_hop_risk_paths: GraphRiskPath[];
+  multi_hop_exposure_count: number;
+  graph_signals: GraphSignal[];
+};
+
+type TimelineTransaction = {
+  transaction_hash: string;
+  chain: string;
+  direction: string;
+  counterparty: string;
+  asset: string | null;
+  value: number;
+  block_number: number | null;
+  timestamp: string | null;
+  contract_address: string | null;
+};
+
+type TimelineBurst = {
+  start_time: string;
+  end_time: string;
+  transaction_count: number;
+  duration_seconds: number;
+};
+
+type TimelineAnalyticsResponse = {
+  address: string;
+  chain: string;
+  first_activity: string | null;
+  last_activity: string | null;
+  total_transactions: number;
+  incoming_transactions: number;
+  outgoing_transactions: number;
+  incoming_value: number;
+  outgoing_value: number;
+  total_value: number;
+  activity_duration_seconds: number;
+  average_transaction_gap_seconds: number | null;
+  shortest_transaction_gap_seconds: number | null;
+  longest_transaction_gap_seconds: number | null;
+  bursts: TimelineBurst[];
+  largest_transactions: TimelineTransaction[];
+  transactions: TimelineTransaction[];
+  temporal_signals: GraphSignal[];
+};
+
+type MLRiskResponse = {
+  address: string;
+  chain: string;
+  prediction: number;
+  probability: number;
+  model_version: string;
+  schema_version: string;
+  features: Record<string, unknown>;
+  status: string;
+  notice: string;
+};
+
+type AMLSignal = {
+  source: string;
+  signal: string;
+  severity: string;
+  reason: string;
+  evidence: Record<string, unknown>;
+};
+
+type AMLAssessmentResponse = {
+  address: string;
+  chain: string;
+  assessment_type: string;
+  review_status: string;
+  indicator_count: number;
+  high_severity_indicator_count: number;
+  medium_severity_indicator_count: number;
+  indicators: string[];
+  signals: AMLSignal[];
+  ml: MLRiskResponse | null;
+  notice: string;
+};
+
+type VaspCandidate = {
+  name: string | null;
+  address: string;
+  chain: string;
+  source: string | null;
+  risk_category: string | null;
+  confidence: number | null;
+  evidence: string | null;
+  hop: number | null;
+  attribution_basis: string;
+  reason: string;
+  wallets: string[];
+  transfers: TraceTransfer[];
+};
+
+type VaspAttributionResponse = {
+  case_id: number;
+  wallet_id: number;
+  wallet_address: string;
+  wallet_chain: string;
+  address: string;
+  chain: string;
+  max_hops: number;
+  status: string;
+  candidate_count: number;
+  candidates: VaspCandidate[];
+  method: string;
+  notice: string;
+};
+
+type CaseNote = {
+  id: number;
+  case_id: number;
+  content: string;
+  created_by: number;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type CaseEvidence = {
+  id: number;
+  case_id: number;
+  created_by: number;
+  evidence_type: string;
+  title: string;
+  description: string | null;
+  reference: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 function App() {
@@ -200,6 +370,9 @@ function App() {
   const [maxHops, setMaxHops] =
     useState("2");
 
+  const [liveRefresh, setLiveRefresh] =
+    useState(true);
+
   const [trace, setTrace] =
     useState<TraceResponse | null>(null);
 
@@ -209,6 +382,119 @@ function App() {
 
   const [risk, setRisk] =
     useState<RiskResponse | null>(null);
+
+  /* =========================
+     WALLET ANALYTICS STATE
+  ========================= */
+
+  const [graphAnalytics, setGraphAnalytics] =
+    useState<GraphAnalyticsResponse | null>(null);
+
+  const [timelineAnalytics, setTimelineAnalytics] =
+    useState<TimelineAnalyticsResponse | null>(null);
+
+  const [analyticsLoading, setAnalyticsLoading] =
+    useState(false);
+
+  /* =========================
+     ML / AML STATE
+  ========================= */
+
+  const [mlRisk, setMlRisk] =
+    useState<MLRiskResponse | null>(null);
+
+  const [amlAssessment, setAmlAssessment] =
+    useState<AMLAssessmentResponse | null>(null);
+
+  const [mlAmlLoading, setMlAmlLoading] =
+    useState(false);
+
+  /* =========================
+     VASP ATTRIBUTION STATE
+  ========================= */
+
+  const [vaspAttribution, setVaspAttribution] =
+    useState<VaspAttributionResponse | null>(null);
+
+  const [vaspLoading, setVaspLoading] =
+    useState(false);
+
+  const [vaspLabelName, setVaspLabelName] =
+    useState("");
+
+  const [vaspLabelSource, setVaspLabelSource] =
+    useState("Etherscan");
+
+  const [vaspLabelConfidence, setVaspLabelConfidence] =
+    useState("0.95");
+
+  const [vaspLabelEvidence, setVaspLabelEvidence] =
+    useState("");
+
+  const [vaspLabelSaving, setVaspLabelSaving] =
+    useState(false);
+
+  /* =========================
+     NOTES STATE
+  ========================= */
+
+  const [notes, setNotes] =
+    useState<CaseNote[]>([]);
+
+  const [notesLoading, setNotesLoading] =
+    useState(false);
+
+  const [noteSaving, setNoteSaving] =
+    useState(false);
+
+  const [newNoteContent, setNewNoteContent] =
+    useState("");
+
+  const [editingNoteId, setEditingNoteId] =
+    useState<number | null>(null);
+
+  const [editingNoteContent, setEditingNoteContent] =
+    useState("");
+
+  /* =========================
+     CASE EVIDENCE STATE
+  ========================= */
+
+  const [evidenceItems, setEvidenceItems] =
+    useState<CaseEvidence[]>([]);
+
+  const [evidenceLoading, setEvidenceLoading] =
+    useState(false);
+
+  const [evidenceSaving, setEvidenceSaving] =
+    useState(false);
+
+  const [newEvidenceType, setNewEvidenceType] =
+    useState("transaction");
+
+  const [newEvidenceTitle, setNewEvidenceTitle] =
+    useState("");
+
+  const [newEvidenceDescription, setNewEvidenceDescription] =
+    useState("");
+
+  const [newEvidenceReference, setNewEvidenceReference] =
+    useState("");
+
+  const [editingEvidenceId, setEditingEvidenceId] =
+    useState<number | null>(null);
+
+  const [editingEvidenceType, setEditingEvidenceType] =
+    useState("");
+
+  const [editingEvidenceTitle, setEditingEvidenceTitle] =
+    useState("");
+
+  const [editingEvidenceDescription, setEditingEvidenceDescription] =
+    useState("");
+
+  const [editingEvidenceReference, setEditingEvidenceReference] =
+    useState("");
 
   /* =========================
      GRAPH STATE
@@ -253,7 +539,15 @@ function App() {
     useState<WalletTransaction | null>(null);
 
   const [investigationTab, setInvestigationTab] =
-    useState<"wallet" | "transaction">("wallet");
+    useState<
+      "wallet"
+      | "transaction"
+      | "analytics"
+      | "ml-aml"
+      | "vasp"
+      | "notes"
+      | "evidence"
+    >("wallet");
 
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(false);
@@ -272,6 +566,9 @@ function App() {
     useState(false);
 
   const [riskLoading, setRiskLoading] =
+    useState(false);
+
+  const [reportLoading, setReportLoading] =
     useState(false);
 
   const [error, setError] =
@@ -320,10 +617,16 @@ function App() {
     if (!token || !selectedCase) {
       setWallets([]);
       setSelectedWalletId(null);
+      setNotes([]);
       return;
     }
 
+    setNotes([]);
+    setEvidenceItems([]);
+    setEditingEvidenceId(null);
     loadWallets(selectedCase.id);
+    void loadNotes(selectedCase.id);
+    void loadEvidence(selectedCase.id);
   }, [token, selectedCase]);
 
   /* =========================
@@ -470,6 +773,436 @@ function App() {
   }
 
   /* =========================
+     NOTES
+  ========================= */
+
+  async function loadNotes(caseId: number) {
+    if (!token) return;
+
+    setNotesLoading(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${caseId}/notes`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Notes API returned ${response.status}`);
+      }
+
+      const data: CaseNote[] = await response.json();
+      setNotes(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load notes");
+    } finally {
+      setNotesLoading(false);
+    }
+  }
+
+  async function handleCreateNote(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!token || !selectedCase) {
+      setError("Please select a case first.");
+      return;
+    }
+
+    const content = newNoteContent.trim();
+    if (!content) {
+      setError("Note content is required.");
+      return;
+    }
+
+    setNoteSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/notes`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ content }),
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Create note failed with status ${response.status}`);
+      }
+
+      const createdNote: CaseNote = await response.json();
+      setNotes((current) => [createdNote, ...current]);
+      setNewNoteContent("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create note");
+    } finally {
+      setNoteSaving(false);
+    }
+  }
+
+  async function handleUpdateNote(noteId: number) {
+    if (!token || !selectedCase) {
+      setError("Please select a case first.");
+      return;
+    }
+
+    const content = editingNoteContent.trim();
+    if (!content) {
+      setError("Note content is required.");
+      return;
+    }
+
+    setNoteSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/notes/${noteId}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ content }),
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Update note failed with status ${response.status}`);
+      }
+
+      const updatedNote: CaseNote = await response.json();
+      setNotes((current) =>
+        current.map((note) => note.id === noteId ? updatedNote : note),
+      );
+      setEditingNoteId(null);
+      setEditingNoteContent("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update note");
+    } finally {
+      setNoteSaving(false);
+    }
+  }
+
+  async function handleDeleteNote(noteId: number) {
+    if (!token || !selectedCase) {
+      setError("Please select a case first.");
+      return;
+    }
+
+    if (!window.confirm("Delete this analyst note? This action cannot be undone.")) {
+      return;
+    }
+
+    setNoteSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/notes/${noteId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Delete note failed with status ${response.status}`);
+      }
+
+      setNotes((current) => current.filter((note) => note.id !== noteId));
+      if (editingNoteId === noteId) {
+        setEditingNoteId(null);
+        setEditingNoteContent("");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete note");
+    } finally {
+      setNoteSaving(false);
+    }
+  }
+
+  function startEditingNote(note: CaseNote) {
+    setEditingNoteId(note.id);
+    setEditingNoteContent(note.content);
+    setError(null);
+  }
+
+  function cancelEditingNote() {
+    setEditingNoteId(null);
+    setEditingNoteContent("");
+  }
+
+  /* =========================
+     CASE EVIDENCE
+  ========================= */
+
+  async function loadEvidence(caseId: number) {
+    if (!token) return;
+
+    setEvidenceLoading(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${caseId}/evidence`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Evidence API returned ${response.status}`);
+      }
+
+      const data: CaseEvidence[] = await response.json();
+      setEvidenceItems(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load evidence");
+    } finally {
+      setEvidenceLoading(false);
+    }
+  }
+
+  function resetEvidenceForm() {
+    setNewEvidenceType("transaction");
+    setNewEvidenceTitle("");
+    setNewEvidenceDescription("");
+    setNewEvidenceReference("");
+  }
+
+  async function handleCreateEvidence(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!token || !selectedCase) {
+      setError("Please select a case first.");
+      return;
+    }
+
+    const evidenceType = newEvidenceType.trim();
+    const title = newEvidenceTitle.trim();
+    const description = newEvidenceDescription.trim();
+    const reference = newEvidenceReference.trim();
+
+    if (!evidenceType) {
+      setError("Evidence type is required.");
+      return;
+    }
+
+    if (!title) {
+      setError("Evidence title is required.");
+      return;
+    }
+
+    setEvidenceSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/evidence`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            evidence_type: evidenceType,
+            title,
+            description: description || null,
+            reference: reference || null,
+          }),
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Create evidence failed with status ${response.status}`);
+      }
+
+      const createdEvidence: CaseEvidence = await response.json();
+      setEvidenceItems((current) => [...current, createdEvidence]);
+      resetEvidenceForm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create evidence");
+    } finally {
+      setEvidenceSaving(false);
+    }
+  }
+
+  function startEditingEvidence(evidence: CaseEvidence) {
+    setEditingEvidenceId(evidence.id);
+    setEditingEvidenceType(evidence.evidence_type);
+    setEditingEvidenceTitle(evidence.title);
+    setEditingEvidenceDescription(evidence.description ?? "");
+    setEditingEvidenceReference(evidence.reference ?? "");
+    setError(null);
+  }
+
+  function cancelEditingEvidence() {
+    setEditingEvidenceId(null);
+    setEditingEvidenceType("");
+    setEditingEvidenceTitle("");
+    setEditingEvidenceDescription("");
+    setEditingEvidenceReference("");
+  }
+
+  async function handleUpdateEvidence(evidenceId: number) {
+    if (!token || !selectedCase) {
+      setError("Please select a case first.");
+      return;
+    }
+
+    const evidenceType = editingEvidenceType.trim();
+    const title = editingEvidenceTitle.trim();
+    const description = editingEvidenceDescription.trim();
+    const reference = editingEvidenceReference.trim();
+
+    if (!evidenceType) {
+      setError("Evidence type is required.");
+      return;
+    }
+
+    if (!title) {
+      setError("Evidence title is required.");
+      return;
+    }
+
+    setEvidenceSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/evidence/${evidenceId}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            evidence_type: evidenceType,
+            title,
+            description,
+            reference,
+          }),
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Update evidence failed with status ${response.status}`);
+      }
+
+      const updatedEvidence: CaseEvidence = await response.json();
+      setEvidenceItems((current) =>
+        current.map((item) =>
+          item.id === evidenceId ? updatedEvidence : item,
+        ),
+      );
+      cancelEditingEvidence();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update evidence");
+    } finally {
+      setEvidenceSaving(false);
+    }
+  }
+
+  async function handleDeleteEvidence(evidenceId: number) {
+    if (!token || !selectedCase) {
+      setError("Please select a case first.");
+      return;
+    }
+
+    if (!window.confirm("Delete this evidence item? This action cannot be undone.")) {
+      return;
+    }
+
+    setEvidenceSaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/evidence/${evidenceId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Delete evidence failed with status ${response.status}`);
+      }
+
+      setEvidenceItems((current) =>
+        current.filter((item) => item.id !== evidenceId),
+      );
+
+      if (editingEvidenceId === evidenceId) {
+        cancelEditingEvidence();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete evidence");
+    } finally {
+      setEvidenceSaving(false);
+    }
+  }
+
+  /* =========================
      LOGIN
   ========================= */
 
@@ -546,6 +1279,15 @@ function App() {
 
     setTrace(null);
     setRisk(null);
+    setGraphAnalytics(null);
+    setTimelineAnalytics(null);
+    setMlRisk(null);
+    setAmlAssessment(null);
+    setVaspAttribution(null);
+    setNotes([]);
+    setNewNoteContent("");
+    setEditingNoteId(null);
+    setEditingNoteContent("");
 
     setNodes([]);
     setEdges([]);
@@ -844,6 +1586,11 @@ function App() {
 
       setTrace(null);
       setRisk(null);
+      setGraphAnalytics(null);
+      setTimelineAnalytics(null);
+      setMlRisk(null);
+      setAmlAssessment(null);
+      setVaspAttribution(null);
       setNodes([]);
       setEdges([]);
     } catch (err) {
@@ -958,6 +1705,85 @@ function App() {
   }
 
   /* =========================
+     GENERATE INVESTIGATION REPORT
+  ========================= */
+
+  async function handleGenerateReport() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedCase) {
+      setError("Create or select a case first.");
+      return;
+    }
+
+    setReportLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/reports`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message || `Report generation returned ${response.status}`,
+        );
+      }
+
+      const blob = await response.blob();
+
+      if (blob.size === 0) {
+        throw new Error("The generated report was empty.");
+      }
+
+      const contentDisposition = response.headers.get(
+        "Content-Disposition",
+      );
+
+      const filenameMatch = contentDisposition?.match(
+        /filename="?([^";]+)"?/i,
+      );
+
+      const filename =
+        filenameMatch?.[1] ||
+        `case_${selectedCase.id}_investigation_report.pdf`;
+
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to generate investigation report",
+      );
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
+  /* =========================
      TRACE WALLET
   ========================= */
 
@@ -982,12 +1808,17 @@ function App() {
     setError(null);
 
     setRisk(null);
+    setGraphAnalytics(null);
+    setTimelineAnalytics(null);
+    setMlRisk(null);
+    setAmlAssessment(null);
+    setVaspAttribution(null);
     setSelectedWallet(null);
     setSelectedTransfer(null);
 
     try {
       const response = await fetch(
-        `${API_URL}/wallets/trace/${address}?chain=${chain}&direction=${direction}&max_hops=${maxHops}`,
+        `${API_URL}/wallets/trace/${address}?chain=${chain}&direction=${direction}&max_hops=${maxHops}&refresh_live=${liveRefresh}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -1042,112 +1873,222 @@ function App() {
           walletAddresses,
         );
 
+      // Build a graph-aware layout so wallets are separated by hop distance.
+      const adjacency = new Map<string, string[]>();
+
+      walletList.forEach((wallet) => {
+        adjacency.set(wallet, []);
+      });
+
+      data.traces.forEach((item) => {
+        for (
+          let i = 0;
+          i < item.wallets.length - 1;
+          i += 1
+        ) {
+          const source = item.wallets[i];
+          const target = item.wallets[i + 1];
+
+          if (
+            source.toLowerCase() ===
+            target.toLowerCase()
+          ) {
+            continue;
+          }
+
+          adjacency.get(source)?.push(target);
+          adjacency.get(target)?.push(source);
+        }
+      });
+
+      const nodeLevels = new Map<string, number>();
+      const layoutQueue: string[] = [data.address];
+
+      nodeLevels.set(data.address, 0);
+
+      let queueIndex = 0;
+
+      while (queueIndex < layoutQueue.length) {
+        const current = layoutQueue[queueIndex];
+        queueIndex += 1;
+
+        const currentLevel =
+          nodeLevels.get(current) ?? 0;
+
+        for (
+          const neighbor of adjacency.get(current) ?? []
+        ) {
+          if (!nodeLevels.has(neighbor)) {
+            nodeLevels.set(
+              neighbor,
+              currentLevel + 1,
+            );
+
+            layoutQueue.push(neighbor);
+          }
+        }
+      }
+
+      const fallbackLevel =
+        Math.max(
+          0,
+          ...Array.from(nodeLevels.values()),
+        ) + 1;
+
+      walletList.forEach((wallet) => {
+        if (!nodeLevels.has(wallet)) {
+          nodeLevels.set(wallet, fallbackLevel);
+        }
+      });
+
+      const nodesByLevel =
+        new Map<number, string[]>();
+
+      walletList.forEach((wallet) => {
+        const level =
+          nodeLevels.get(wallet) ?? 0;
+
+        const levelWallets =
+          nodesByLevel.get(level) ?? [];
+
+        levelWallets.push(wallet);
+        nodesByLevel.set(level, levelWallets);
+      });
+
       const generatedNodes: Node[] =
-        walletList.map(
-          (
-            wallet,
-            index,
-          ) => {
-            const isTarget =
-              wallet.toLowerCase() ===
-              data.address.toLowerCase();
+        walletList.map((wallet) => {
+          const isTarget =
+            wallet.toLowerCase() ===
+            data.address.toLowerCase();
 
-            return {
-              id: wallet,
+          const level =
+            nodeLevels.get(wallet) ?? 0;
 
-              position: {
-                x:
-                  (index % 4) *
-                  330,
-                y:
-                  Math.floor(
-                    index / 4,
-                  ) * 240,
-              },
+          const levelWallets =
+            nodesByLevel.get(level) ?? [];
 
-              data: {
-                label: isTarget
-                  ? `TARGET WALLET\n${shortenAddress(wallet)}`
-                  : `WALLET\n${shortenAddress(wallet)}`,
-              },
+          const levelIndex =
+            levelWallets.indexOf(wallet);
 
-              style: {
-                padding: 12,
-                borderRadius: 8,
+          const verticalSpacing = 300;
 
-                border: isTarget
-                  ? "2px solid #ef4444"
-                  : "1px solid #64748b",
+          const levelHeight =
+            (levelWallets.length - 1) *
+            verticalSpacing;
 
-                background:
-                  isTarget
-                    ? "#3f1720"
-                    : "#172033",
+          const y =
+            levelIndex *
+            verticalSpacing -
+            levelHeight / 2;
 
-                color:
-                  "#ffffff",
+          return {
+            id: wallet,
 
-                width: 240,
+            position: {
+              x: level * 430,
+              y,
+            },
 
-                fontSize: 12,
+            data: {
+              label: isTarget
+                ? `TARGET WALLET\n${shortenAddress(wallet)}`
+                : `WALLET\n${shortenAddress(wallet)}`,
+            },
 
-                lineHeight: 1.5,
+            style: {
+              padding: 12,
+              borderRadius: 8,
 
-                textAlign:
-                  "center",
+              border: isTarget
+                ? "2px solid #ef4444"
+                : "1px solid #64748b",
 
-                cursor:
-                  "pointer",
-              },
-            };
-          },
-        );
+              background:
+                isTarget
+                  ? "#3f1720"
+                  : "#172033",
 
-      const generatedEdges: Edge[] =
-        [];
+              color: "#ffffff",
+
+              width: 240,
+
+              fontSize: 12,
+
+              lineHeight: 1.5,
+
+              textAlign: "center",
+
+              cursor: "pointer",
+            },
+          };
+        });
+      const edgeMap = new Map<string, Edge & {
+        connection_count?: number;
+      }>();
 
       data.traces.forEach(
-        (
-          item,
-          traceIndex,
-        ) => {
+        (item) => {
           for (
             let i = 0;
-            i <
-              item.wallets
-                .length -
-                1;
+            i < item.wallets.length - 1;
             i += 1
           ) {
-            const source =
-              item.wallets[i];
+            const source = item.wallets[i];
+            const target = item.wallets[i + 1];
+            const transfer = item.transfers[i];
 
-            const target =
-              item.wallets[i + 1];
+            // Ignore self-loop connections.
+            if (
+              source.toLowerCase() ===
+              target.toLowerCase()
+            ) {
+              continue;
+            }
 
-            const transfer =
-              item.transfers[i];
+            // Treat A -> B and B -> A as one visual connection.
+            const [firstWallet, secondWallet] =
+              [source, target].sort();
 
-            generatedEdges.push({
-              id: `${source}-${target}-${traceIndex}-${i}`,
+            const key =
+              `${firstWallet}->${secondWallet}`;
+
+            const existing = edgeMap.get(key);
+
+            if (existing) {
+              existing.connection_count =
+                (existing.connection_count ?? 1) + 1;
+
+              if (existing.data) {
+                existing.data = {
+                  ...existing.data,
+                  connection_count:
+                    existing.connection_count,
+                };
+              }
+
+              continue;
+            }
+
+            edgeMap.set(key, {
+              id: `connection-${edgeMap.size}`,
 
               source,
               target,
 
+              type: "default",
+
+
               data: {
                 transfer,
                 hop_count: item.hop_count,
+                connection_count: 1,
               },
 
               label: transfer?.asset
                 ? `${transfer.asset} ${
-                    transfer.value !==
-                      null &&
-                    transfer.value !==
-                      undefined
-                      ? formatNumber(
-                          transfer.value,
-                        )
+                    transfer.value !== null &&
+                    transfer.value !== undefined
+                      ? formatNumber(transfer.value)
                       : ""
                   }`
                 : "TRANSFER",
@@ -1172,13 +2113,14 @@ function App() {
                 2,
               ],
 
-              labelBgBorderRadius:
-                3,
+              labelBgBorderRadius: 3,
             });
           }
         },
       );
 
+      const generatedEdges: Edge[] =
+        Array.from(edgeMap.values());
       setNodes(
         generatedNodes,
       );
@@ -1261,6 +2203,257 @@ function App() {
       );
     } finally {
       setRiskLoading(false);
+    }
+  }
+
+  /* =========================
+     LOAD WALLET ANALYTICS
+  ========================= */
+
+  async function handleLoadWalletAnalytics() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedCase || !selectedWalletId || !selectedWallet) {
+      setError("Select a saved case wallet first.");
+      return;
+    }
+
+    const wallet = wallets.find(
+      (item) => item.id === selectedWalletId,
+    );
+
+    if (!wallet || wallet.address.toLowerCase() !== selectedWallet.toLowerCase()) {
+      setError("Analytics are available for wallets saved in the selected case.");
+      return;
+    }
+
+    setAnalyticsLoading(true);
+    setError(null);
+
+    try {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+      };
+
+      const [graphResponse, timelineResponse] = await Promise.all([
+        fetch(
+          `${API_URL}/cases/${selectedCase.id}/wallets/${selectedWalletId}/graph-analytics`,
+          { headers },
+        ),
+        fetch(
+          `${API_URL}/cases/${selectedCase.id}/wallets/${selectedWalletId}/timeline`,
+          { headers },
+        ),
+      ]);
+
+      if (graphResponse.status === 401 || timelineResponse.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!graphResponse.ok) {
+        const message = await graphResponse.text();
+        throw new Error(
+          message || `Graph analytics returned ${graphResponse.status}`,
+        );
+      }
+
+      if (!timelineResponse.ok) {
+        const message = await timelineResponse.text();
+        throw new Error(
+          message || `Timeline analytics returned ${timelineResponse.status}`,
+        );
+      }
+
+      const graphData: GraphAnalyticsResponse = await graphResponse.json();
+      const timelineData: TimelineAnalyticsResponse = await timelineResponse.json();
+
+      setGraphAnalytics(graphData);
+      setTimelineAnalytics(timelineData);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load wallet analytics",
+      );
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }
+
+  /* =========================
+     LOAD ML RISK + AML ASSESSMENT
+  ========================= */
+
+  async function handleLoadMlAml() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedCase || !selectedWalletId || !selectedWallet) {
+      setError("Select a saved case wallet first.");
+      return;
+    }
+
+    const wallet = wallets.find((item) => item.id === selectedWalletId);
+    if (!wallet || wallet.address.toLowerCase() !== selectedWallet.toLowerCase()) {
+      setError("ML and AML assessment are available for wallets saved in the selected case.");
+      return;
+    }
+
+    setMlAmlLoading(true);
+    setError(null);
+
+    try {
+      const headers = { Authorization: `Bearer ${token}` };
+      const [mlResponse, amlResponse] = await Promise.all([
+        fetch(`${API_URL}/cases/${selectedCase.id}/wallets/${selectedWalletId}/ml-risk`, { headers }),
+        fetch(`${API_URL}/cases/${selectedCase.id}/wallets/${selectedWalletId}/aml-assessment`, { headers }),
+      ]);
+
+      if (mlResponse.status === 401 || amlResponse.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+      if (!mlResponse.ok) {
+        const message = await mlResponse.text();
+        throw new Error(message || `ML risk returned ${mlResponse.status}`);
+      }
+      if (!amlResponse.ok) {
+        const message = await amlResponse.text();
+        throw new Error(message || `AML assessment returned ${amlResponse.status}`);
+      }
+
+      const mlData: MLRiskResponse = await mlResponse.json();
+      const amlData: AMLAssessmentResponse = await amlResponse.json();
+      setMlRisk(mlData);
+      setAmlAssessment(amlData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load ML risk and AML assessment");
+    } finally {
+      setMlAmlLoading(false);
+    }
+  }
+
+  /* =========================
+     LOAD VASP ATTRIBUTION
+  ========================= */
+
+  async function handleLoadVaspAttribution() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedCase || !selectedWalletId || !selectedWallet) {
+      setError("Select a saved case wallet first.");
+      return;
+    }
+
+    const wallet = wallets.find((item) => item.id === selectedWalletId);
+    if (!wallet || wallet.address.toLowerCase() !== selectedWallet.toLowerCase()) {
+      setError("VASP attribution is available for wallets saved in the selected case.");
+      return;
+    }
+
+    setVaspLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/wallets/${selectedWalletId}/vasp-attribution?max_hops=2`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `VASP attribution returned ${response.status}`);
+      }
+
+      const data: VaspAttributionResponse = await response.json();
+      setVaspAttribution(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load VASP attribution");
+    } finally {
+      setVaspLoading(false);
+    }
+  }
+
+  async function handleAddKnownVaspLabel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token || !selectedCase || !selectedWalletId || !selectedWallet) {
+      setError("Select a saved case wallet first.");
+      return;
+    }
+
+    const name = vaspLabelName.trim();
+    const source = vaspLabelSource.trim();
+    const evidence = vaspLabelEvidence.trim();
+    const confidence = Number(vaspLabelConfidence);
+
+    if (!name) {
+      setError("VASP name is required.");
+      return;
+    }
+    if (!source) {
+      setError("Intelligence source is required.");
+      return;
+    }
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      setError("Confidence must be between 0 and 1.");
+      return;
+    }
+
+    setVaspLabelSaving(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_URL}/intelligence/risk-entities`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          address: selectedWallet,
+          chain,
+          entity_type: "vasp",
+          name,
+          source,
+          risk_category: "centralized_exchange",
+          confidence,
+          evidence: evidence || undefined,
+        }),
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Adding VASP label returned ${response.status}`);
+      }
+
+      setVaspLabelName("");
+      setVaspLabelEvidence("");
+      setVaspAttribution(null);
+      await handleLoadVaspAttribution();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add known VASP label");
+    } finally {
+      setVaspLabelSaving(false);
     }
   }
 
@@ -1382,7 +2575,13 @@ function App() {
     node: Node,
   ) {
     setSelectedTransfer(null);
+    setMlRisk(null);
+    setAmlAssessment(null);
     setSelectedWallet(node.id);
+    const savedWallet = wallets.find(
+      (wallet) => wallet.address.toLowerCase() === node.id.toLowerCase(),
+    );
+    setSelectedWalletId(savedWallet?.id ?? null);
     setInvestigationTab("wallet");
   }
 
@@ -1614,6 +2813,26 @@ function App() {
               gap: "8px",
             }}
           >
+            <button
+              type="button"
+              onClick={handleGenerateReport}
+              disabled={reportLoading || !selectedCase}
+              title={
+                selectedCase
+                  ? "Generate investigation PDF for the active case"
+                  : "Select a case first"
+              }
+              style={{
+                ...workspaceToggleButtonStyle,
+                background: reportLoading ? "#1e3a8a" : "#2563eb",
+                borderColor: "#2563eb",
+                opacity: reportLoading || !selectedCase ? 0.65 : 1,
+                cursor: reportLoading || !selectedCase ? "not-allowed" : "pointer",
+                fontWeight: 700,
+              }}
+            >
+              {reportLoading ? "Generating..." : "📄 Report"}
+            </button>
             <button
               type="button"
               onClick={() => setSidebarCollapsed((current) => !current)}
@@ -2042,6 +3261,8 @@ function App() {
                           setRisk(
                             null,
                           );
+                          setGraphAnalytics(null);
+                          setTimelineAnalytics(null);
 
                           setNodes(
                             [],
@@ -2227,6 +3448,26 @@ function App() {
                   selectedCase.status
                 }
               </div>
+
+              <button
+                type="button"
+                onClick={handleGenerateReport}
+                disabled={reportLoading}
+                style={{
+                  marginTop: "10px",
+                  width: "100%",
+                  padding: "8px 10px",
+                  border: "1px solid #2563eb",
+                  borderRadius: "6px",
+                  background: reportLoading ? "#1e3a8a" : "#2563eb",
+                  color: "#ffffff",
+                  cursor: reportLoading ? "not-allowed" : "pointer",
+                  fontSize: "10px",
+                  fontWeight: 700,
+                }}
+              >
+                {reportLoading ? "Generating Investigation Report..." : "📄 Generate Investigation Report"}
+              </button>
             </div>
           )}
 
@@ -2474,6 +3715,10 @@ function App() {
                             setSelectedWalletId(
                               wallet.id,
                             );
+                            setSelectedWallet(wallet.address);
+                            setInvestigationTab("wallet");
+                            setGraphAnalytics(null);
+                            setTimelineAnalytics(null);
 
                             setAddress(
                               wallet.address,
@@ -2793,7 +4038,41 @@ function App() {
                   <option value="2">
                     2 Hops
                   </option>
+
+                  <option value="3">
+                    3 Hops
+                  </option>
+
+                  <option value="4">
+                    4 Hops
+                  </option>
+
+                  <option value="5">
+                    5 Hops
+                  </option>
                 </select>
+
+                <label
+                  style={{
+                    ...labelStyle,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    cursor: "pointer",
+                    marginTop: "10px",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={liveRefresh}
+                    onChange={(event) =>
+                      setLiveRefresh(
+                        event.target.checked,
+                      )
+                    }
+                  />
+                  Live Blockchain Refresh
+                </label>
 
                 <button
                   type="submit"
@@ -2879,7 +4158,12 @@ function App() {
                       Connections:
                     </strong>{" "}
                     {
-                      edges.length
+                      new Set(
+                          edges.map(
+                            (edge) =>
+                              `${edge.source}->${edge.target}`,
+                          ),
+                        ).size
                     }
                   </div>
                 </div>
@@ -2994,8 +4278,15 @@ function App() {
             </button>
           </div>
 
-          {selectedWallet && selectedTransfer && (
-            <div style={investigationTabsStyle}>
+          {selectedWallet && (
+            <div
+              style={{
+                ...investigationTabsStyle,
+                gridTemplateColumns: selectedTransfer
+                  ? "repeat(7, minmax(0, 1fr))"
+                  : "repeat(6, minmax(0, 1fr))",
+              }}
+            >
               <button
                 type="button"
                 onClick={() => setInvestigationTab("wallet")}
@@ -3003,19 +4294,299 @@ function App() {
               >
                 Wallet
               </button>
+
+              {selectedTransfer && (
+                <button
+                  type="button"
+                  onClick={() => setInvestigationTab("transaction")}
+                  style={investigationTabStyle(investigationTab === "transaction")}
+                >
+                  Transaction
+                </button>
+              )}
+
               <button
                 type="button"
-                onClick={() => setInvestigationTab("transaction")}
-                style={investigationTabStyle(investigationTab === "transaction")}
+                onClick={() => {
+                  setInvestigationTab("analytics");
+                  if (!graphAnalytics || !timelineAnalytics) {
+                    void handleLoadWalletAnalytics();
+                  }
+                }}
+                style={investigationTabStyle(investigationTab === "analytics")}
               >
-                Transaction
+                Analytics
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setInvestigationTab("ml-aml");
+                  if (!mlRisk || !amlAssessment) {
+                    void handleLoadMlAml();
+                  }
+                }}
+                style={investigationTabStyle(investigationTab === "ml-aml")}
+              >
+                ML / AML
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setInvestigationTab("vasp");
+                  if (!vaspAttribution) {
+                    void handleLoadVaspAttribution();
+                  }
+                }}
+                style={investigationTabStyle(investigationTab === "vasp")}
+              >
+                VASP Attribution
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setInvestigationTab("notes");
+                  if (selectedCase && notes.length === 0 && !notesLoading) {
+                    void loadNotes(selectedCase.id);
+                  }
+                }}
+                style={investigationTabStyle(investigationTab === "notes")}
+              >
+                Notes
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setInvestigationTab("evidence");
+                  if (selectedCase && !evidenceLoading) {
+                    void loadEvidence(selectedCase.id);
+                  }
+                }}
+                style={investigationTabStyle(investigationTab === "evidence")}
+              >
+                Evidence
               </button>
             </div>
           )}
 
+          {/* VASP ATTRIBUTION */}
+
+          {selectedWallet && investigationTab === "vasp" && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>VASP Attribution</div>
+                <div style={{ marginTop: "7px", fontSize: "10px", color: "#94a3b8", lineHeight: 1.5 }}>
+                  Known-VASP intelligence matching across transaction-connected wallets. This is a research-stage intelligence assessment.
+                </div>
+                {!selectedWalletId ? (
+                  <div style={analyticsWarningStyle}>
+                    This traced wallet is not saved in the selected case. Select a saved case wallet to load VASP attribution.
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => void handleLoadVaspAttribution()} disabled={vaspLoading} style={{ ...primaryButtonStyle, marginTop: "10px" }}>
+                    {vaspLoading ? "Loading VASP Attribution..." : "Refresh VASP Attribution"}
+                  </button>
+                )}
+              </div>
+
+              {vaspLoading && (
+                <div style={analyticsLoadingStyle}>Searching known VASP intelligence across the transaction graph...</div>
+              )}
+
+              {vaspAttribution && (
+                <>
+                  <div style={panelSectionStyle}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                      <div style={sectionTitleStyle}>Attribution Summary</div>
+                      <span style={filterCountBadgeStyle}>
+                        {vaspAttribution.candidate_count} candidate{vaspAttribution.candidate_count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: "8px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                      <div style={analyticsStatStyle}><span>Status</span><strong>{vaspAttribution.status}</strong></div>
+                      <div style={analyticsStatStyle}><span>Max hops</span><strong>{vaspAttribution.max_hops}</strong></div>
+                      <div style={analyticsStatStyle}><span>Chain</span><strong>{vaspAttribution.chain}</strong></div>
+                      <div style={analyticsStatStyle}><span>Candidates</span><strong>{vaspAttribution.candidate_count}</strong></div>
+                    </div>
+                    <div style={{ marginTop: "10px", color: "#64748b", fontSize: "9px", lineHeight: 1.5 }}>
+                      {vaspAttribution.method}
+                    </div>
+                  </div>
+
+                  {vaspAttribution.candidates.length === 0 ? (
+                    <div style={analyticsEmptyStyle}>No known VASP candidates were found within the configured transaction path depth.</div>
+                  ) : (
+                    vaspAttribution.candidates.map((candidate, index) => (
+                      <div key={`${candidate.address}-${candidate.name ?? "vasp"}-${index}`} style={panelSectionStyle}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "flex-start" }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={sectionTitleStyle}>{candidate.name ?? "Known VASP"}</div>
+                            <div style={{ marginTop: "5px", color: "#94a3b8", fontSize: "9px", wordBreak: "break-all" }}>{candidate.address}</div>
+                          </div>
+                          <span style={{ ...analyticsSeverityStyle, color: "#86efac", flexShrink: 0 }}>
+                            {candidate.confidence !== null ? `${(candidate.confidence * 100).toFixed(1)}%` : "N/A"}
+                          </span>
+                        </div>
+                        <div style={{ marginTop: "9px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                          <div style={analyticsStatStyle}><span>Hop</span><strong>{candidate.hop ?? "N/A"}</strong></div>
+                          <div style={analyticsStatStyle}><span>Basis</span><strong>{candidate.attribution_basis}</strong></div>
+                          <div style={analyticsStatStyle}><span>Source</span><strong>{candidate.source ?? "N/A"}</strong></div>
+                          <div style={analyticsStatStyle}><span>Category</span><strong>{candidate.risk_category ?? "N/A"}</strong></div>
+                        </div>
+                        <div style={{ marginTop: "9px", color: "#cbd5e1", fontSize: "10px", lineHeight: 1.5 }}>
+                          <strong>Reason:</strong> {candidate.reason}
+                        </div>
+                        {candidate.evidence && (
+                          <div style={{ marginTop: "8px", color: "#94a3b8", fontSize: "10px", lineHeight: 1.5 }}>
+                            <strong style={{ color: "#cbd5e1" }}>Evidence:</strong> {candidate.evidence}
+                          </div>
+                        )}
+                        <details style={{ marginTop: "9px", color: "#94a3b8" }}>
+                          <summary style={{ cursor: "pointer", color: "#60a5fa", fontSize: "10px" }}>Transaction Path Evidence</summary>
+                          <div style={{ marginTop: "8px", fontSize: "9px", color: "#cbd5e1", lineHeight: 1.5 }}>
+                            <div><strong>Wallet path:</strong></div>
+                            <div style={{ marginTop: "4px", wordBreak: "break-all" }}>{candidate.wallets.join(" → ")}</div>
+                            {candidate.transfers.map((transfer, transferIndex) => (
+                              <div key={`${transfer.transaction_hash}-${transferIndex}`} style={{ marginTop: "8px", padding: "8px", background: "#0f1117", border: "1px solid #2f3545", borderRadius: "6px" }}>
+                                <div><strong>Transaction:</strong> <span style={{ wordBreak: "break-all" }}>{transfer.transaction_hash}</span></div>
+                                <div style={{ marginTop: "4px" }}><strong>Asset:</strong> {transfer.asset ?? "N/A"} · <strong>Value:</strong> {transfer.value ?? "N/A"}</div>
+                                <div style={{ marginTop: "4px" }}><strong>Category:</strong> {transfer.category ?? "N/A"} · <strong>Block:</strong> {transfer.block_number ?? "N/A"}</div>
+                                <div style={{ marginTop: "4px" }}><strong>Timestamp:</strong> {transfer.timestamp ?? "N/A"}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      </div>
+                    ))
+                  )}
+                  <div style={amlDisclaimerStyle}>{vaspAttribution.notice}</div>
+                </>
+              )}
+
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>Add Known VASP Label</div>
+                <div style={{ marginTop: "6px", color: "#64748b", fontSize: "9px", lineHeight: 1.45 }}>
+                  Adds a known-VASP intelligence record to the selected wallet address. Use a documented intelligence source.
+                </div>
+                <form onSubmit={handleAddKnownVaspLabel} style={{ marginTop: "10px" }}>
+                  <input value={vaspLabelName} onChange={(event) => setVaspLabelName(event.target.value)} placeholder="VASP name, e.g. Coinbase" style={inputStyle} disabled={vaspLabelSaving} />
+                  <input value={vaspLabelSource} onChange={(event) => setVaspLabelSource(event.target.value)} placeholder="Intelligence source" style={{ ...inputStyle, marginTop: "7px" }} disabled={vaspLabelSaving} />
+                  <input value={vaspLabelConfidence} onChange={(event) => setVaspLabelConfidence(event.target.value)} placeholder="Confidence 0-1" inputMode="decimal" style={{ ...inputStyle, marginTop: "7px" }} disabled={vaspLabelSaving} />
+                  <textarea value={vaspLabelEvidence} onChange={(event) => setVaspLabelEvidence(event.target.value)} placeholder="Evidence / source description" rows={3} style={{ ...inputStyle, marginTop: "7px", resize: "vertical", lineHeight: 1.5 }} disabled={vaspLabelSaving} />
+                  <button type="submit" disabled={vaspLabelSaving || !vaspLabelName.trim()} style={{ ...primaryButtonStyle, marginTop: "7px" }}>
+                    {vaspLabelSaving ? "Saving..." : "Add Known VASP Label"}
+                  </button>
+                </form>
+              </div>
+            </>
+          )}
+
+          {/* CASE NOTES */}
+
+          {selectedWallet && investigationTab === "notes" && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>Analyst Notes</div>
+                <div style={{ marginTop: "6px", color: "#64748b", fontSize: "9px", lineHeight: 1.45 }}>
+                  Notes are stored against the selected investigation case and are included in generated reports.
+                </div>
+
+                <form onSubmit={handleCreateNote} style={{ marginTop: "10px" }}>
+                  <textarea
+                    value={newNoteContent}
+                    onChange={(event) => setNewNoteContent(event.target.value)}
+                    placeholder="Record an investigation observation, decision, or follow-up..."
+                    rows={4}
+                    style={{ ...inputStyle, resize: "vertical", minHeight: "82px", lineHeight: 1.5 }}
+                    disabled={noteSaving}
+                  />
+                  <button
+                    type="submit"
+                    disabled={noteSaving || !newNoteContent.trim()}
+                    style={{ ...primaryButtonStyle, marginTop: "7px" }}
+                  >
+                    {noteSaving ? "Saving..." : "Add Note"}
+                  </button>
+                </form>
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                  <div style={sectionTitleStyle}>Saved Notes</div>
+                  <span style={filterCountBadgeStyle}>{notes.length}</span>
+                </div>
+
+                {notesLoading ? (
+                  <div style={analyticsLoadingStyle}>Loading case notes...</div>
+                ) : notes.length === 0 ? (
+                  <div style={analyticsEmptyStyle}>No analyst notes have been recorded for this case.</div>
+                ) : (
+                  notes.map((note) => (
+                    <div key={note.id} style={noteCardStyle}>
+                      {editingNoteId === note.id ? (
+                        <>
+                          <textarea
+                            value={editingNoteContent}
+                            onChange={(event) => setEditingNoteContent(event.target.value)}
+                            rows={4}
+                            style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
+                            disabled={noteSaving}
+                          />
+                          <div style={noteActionsStyle}>
+                            <button
+                              type="button"
+                              onClick={() => void handleUpdateNote(note.id)}
+                              disabled={noteSaving || !editingNoteContent.trim()}
+                              style={notePrimaryActionStyle}
+                            >
+                              {noteSaving ? "Saving..." : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={cancelEditingNote}
+                              disabled={noteSaving}
+                              style={noteSecondaryActionStyle}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ color: "#e2e8f0", fontSize: "11px", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                            {note.content}
+                          </div>
+                          <div style={noteMetaStyle}>
+                            <span>
+                              {note.created_at ? new Date(note.created_at).toLocaleString() : "Date unavailable"}
+                            </span>
+                            {note.updated_at && note.updated_at !== note.created_at && (
+                              <span>Updated {new Date(note.updated_at).toLocaleString()}</span>
+                            )}
+                          </div>
+                          <div style={noteActionsStyle}>
+                            <button type="button" onClick={() => startEditingNote(note)} disabled={noteSaving} style={noteSecondaryActionStyle}>
+                              Edit
+                            </button>
+                            <button type="button" onClick={() => void handleDeleteNote(note.id)} disabled={noteSaving} style={noteDangerActionStyle}>
+                              Delete
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+
           {/* WALLET DETAILS */}
 
-          {selectedWallet && (!selectedTransfer || investigationTab === "wallet") && (
+          {selectedWallet && investigationTab === "wallet" && (
             <>
               <div
                 style={
@@ -3239,9 +4810,603 @@ function App() {
             </>
           )}
 
+          {/* WALLET ANALYTICS */}
+
+          {selectedWallet && investigationTab === "analytics" && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>
+                  Graph & Timeline Analytics
+                </div>
+                <div
+                  style={{
+                    marginTop: "7px",
+                    fontSize: "10px",
+                    color: "#94a3b8",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Structured analytics from the case wallet APIs.
+                </div>
+
+                {!selectedWalletId ? (
+                  <div
+                    style={{
+                      marginTop: "10px",
+                      padding: "10px",
+                      background: "#2a1f0b",
+                      border: "1px solid #92400e",
+                      borderRadius: "6px",
+                      color: "#fcd34d",
+                      fontSize: "11px",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    This traced wallet is not saved in the selected case. Select a case wallet to load case analytics.
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void handleLoadWalletAnalytics()}
+                    disabled={analyticsLoading}
+                    style={{
+                      ...primaryButtonStyle,
+                      marginTop: "10px",
+                    }}
+                  >
+                    {analyticsLoading ? "Loading Analytics..." : "Refresh Analytics"}
+                  </button>
+                )}
+              </div>
+
+              {analyticsLoading && (
+                <div
+                  style={{
+                    padding: "14px",
+                    color: "#94a3b8",
+                    fontSize: "11px",
+                    textAlign: "center",
+                  }}
+                >
+                  Loading graph and timeline analytics...
+                </div>
+              )}
+
+              {graphAnalytics && (
+                <div style={panelSectionStyle}>
+                  <div style={sectionTitleStyle}>Graph Analytics</div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "6px",
+                      marginTop: "8px",
+                    }}
+                  >
+                    {[
+                      ["Fan-out", graphAnalytics.fan_out],
+                      ["Fan-in", graphAnalytics.fan_in],
+                      ["Outgoing", graphAnalytics.outgoing_connections],
+                      ["Incoming", graphAnalytics.incoming_connections],
+                      ["Risk Paths", graphAnalytics.multi_hop_exposure_count],
+                      ["Out Concentration", `${(graphAnalytics.outgoing_concentration * 100).toFixed(1)}%`],
+                      ["In Concentration", `${(graphAnalytics.incoming_concentration * 100).toFixed(1)}%`],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} style={analyticsStatStyle}>
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={sectionTitleStyle}>Top Outgoing Counterparties</div>
+                    {graphAnalytics.top_outgoing_counterparties.length === 0 ? (
+                      <div style={analyticsEmptyStyle}>No outgoing counterparties.</div>
+                    ) : (
+                      graphAnalytics.top_outgoing_counterparties.slice(0, 5).map((item) => (
+                        <div key={`out-${item.address}`} style={analyticsListItemStyle}>
+                          <div style={{ wordBreak: "break-all" }}>{shortenAddress(item.address)}</div>
+                          <div style={{ color: "#94a3b8", marginTop: "3px" }}>
+                            {item.transaction_count} tx • {formatNumber(item.total_value)}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={sectionTitleStyle}>Graph Signals</div>
+                    {graphAnalytics.graph_signals.length === 0 ? (
+                      <div style={analyticsEmptyStyle}>No graph signals returned.</div>
+                    ) : (
+                      graphAnalytics.graph_signals.map((signal, index) => (
+                        <div key={`graph-signal-${index}`} style={analyticsSignalStyle}>
+                          <strong>{String(signal.signal ?? "Graph signal")}</strong>
+                          {signal.severity && <span style={analyticsSeverityStyle}>{String(signal.severity)}</span>}
+                          {signal.reason && (
+                            <div style={{ marginTop: "4px", color: "#cbd5e1", lineHeight: 1.45 }}>
+                              {String(signal.reason)}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {graphAnalytics.multi_hop_risk_paths.length > 0 && (
+                    <div style={{ marginTop: "12px" }}>
+                      <div style={sectionTitleStyle}>Multi-hop Risk Paths</div>
+                      {graphAnalytics.multi_hop_risk_paths.slice(0, 5).map((path, index) => (
+                        <div key={`path-${index}`} style={analyticsListItemStyle}>
+                          <strong>{path.entity_name ?? path.entity_type}</strong>
+                          <div style={{ marginTop: "3px", color: "#94a3b8", wordBreak: "break-all" }}>
+                            {shortenAddress(path.risk_entity_address)} • {path.hop_count} hop(s)
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {timelineAnalytics && (
+                <div style={panelSectionStyle}>
+                  <div style={sectionTitleStyle}>Timeline Analytics</div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "6px",
+                      marginTop: "8px",
+                    }}
+                  >
+                    {[
+                      ["Transactions", timelineAnalytics.total_transactions],
+                      ["Incoming", timelineAnalytics.incoming_transactions],
+                      ["Outgoing", timelineAnalytics.outgoing_transactions],
+                      ["Bursts", timelineAnalytics.bursts.length],
+                      ["Avg Gap", formatSeconds(timelineAnalytics.average_transaction_gap_seconds)],
+                      ["Shortest Gap", formatSeconds(timelineAnalytics.shortest_transaction_gap_seconds)],
+                      ["Longest Gap", formatSeconds(timelineAnalytics.longest_transaction_gap_seconds)],
+                      ["Duration", formatSeconds(timelineAnalytics.activity_duration_seconds)],
+                    ].map(([label, value]) => (
+                      <div key={String(label)} style={analyticsStatStyle}>
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={sectionTitleStyle}>Temporal Signals</div>
+                    {timelineAnalytics.temporal_signals.length === 0 ? (
+                      <div style={analyticsEmptyStyle}>No temporal signals returned.</div>
+                    ) : (
+                      timelineAnalytics.temporal_signals.map((signal, index) => (
+                        <div key={`temporal-signal-${index}`} style={analyticsSignalStyle}>
+                          <strong>{String(signal.signal ?? "Temporal signal")}</strong>
+                          {signal.severity && <span style={analyticsSeverityStyle}>{String(signal.severity)}</span>}
+                          {signal.reason && (
+                            <div style={{ marginTop: "4px", color: "#cbd5e1", lineHeight: 1.45 }}>
+                              {String(signal.reason)}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={sectionTitleStyle}>Largest Transactions</div>
+                    {timelineAnalytics.largest_transactions.length === 0 ? (
+                      <div style={analyticsEmptyStyle}>No transactions returned.</div>
+                    ) : (
+                      timelineAnalytics.largest_transactions.slice(0, 5).map((tx) => (
+                        <div key={tx.transaction_hash} style={analyticsListItemStyle}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+                            <strong>{tx.direction}</strong>
+                            <strong>{formatNumber(tx.value)}</strong>
+                          </div>
+                          <div style={{ marginTop: "3px", color: "#94a3b8", wordBreak: "break-all" }}>
+                            {shortenAddress(tx.counterparty)}
+                          </div>
+                          <div style={{ marginTop: "3px", color: "#64748b" }}>
+                            {tx.timestamp ?? "Unknown time"}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {timelineAnalytics.bursts.length > 0 && (
+                    <div style={{ marginTop: "12px" }}>
+                      <div style={sectionTitleStyle}>Transaction Bursts</div>
+                      {timelineAnalytics.bursts.slice(0, 5).map((burst, index) => (
+                        <div key={`burst-${index}`} style={analyticsListItemStyle}>
+                          <strong>{burst.transaction_count} transactions</strong>
+                          <div style={{ marginTop: "3px", color: "#94a3b8" }}>
+                            {burst.start_time} → {burst.end_time}
+                          </div>
+                          <div style={{ marginTop: "3px", color: "#64748b" }}>
+                            Duration: {formatSeconds(burst.duration_seconds)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* CASE EVIDENCE */}
+
+          {selectedWallet && investigationTab === "evidence" && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>Case Evidence</div>
+                <div style={{ marginTop: "6px", color: "#64748b", fontSize: "9px", lineHeight: 1.45 }}>
+                  Record evidence references, source details, and investigation material against the selected case.
+                </div>
+
+                <form onSubmit={handleCreateEvidence} style={{ marginTop: "10px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "7px" }}>
+                    <input
+                      value={newEvidenceType}
+                      onChange={(event) => setNewEvidenceType(event.target.value)}
+                      placeholder="Evidence type (e.g. transaction)"
+                      maxLength={50}
+                      style={inputStyle}
+                      disabled={evidenceSaving}
+                    />
+                    <input
+                      value={newEvidenceTitle}
+                      onChange={(event) => setNewEvidenceTitle(event.target.value)}
+                      placeholder="Evidence title"
+                      maxLength={255}
+                      style={inputStyle}
+                      disabled={evidenceSaving}
+                    />
+                  </div>
+
+                  <textarea
+                    value={newEvidenceDescription}
+                    onChange={(event) => setNewEvidenceDescription(event.target.value)}
+                    placeholder="Describe what this evidence shows and why it matters..."
+                    maxLength={10000}
+                    rows={4}
+                    style={{ ...inputStyle, marginTop: "7px", resize: "vertical", minHeight: "82px", lineHeight: 1.5 }}
+                    disabled={evidenceSaving}
+                  />
+
+                  <input
+                    value={newEvidenceReference}
+                    onChange={(event) => setNewEvidenceReference(event.target.value)}
+                    placeholder="Reference: transaction hash, URL, source ID, document reference, etc."
+                    maxLength={1000}
+                    style={{ ...inputStyle, marginTop: "7px" }}
+                    disabled={evidenceSaving}
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={evidenceSaving || !newEvidenceType.trim() || !newEvidenceTitle.trim()}
+                    style={{ ...primaryButtonStyle, marginTop: "7px" }}
+                  >
+                    {evidenceSaving ? "Saving..." : "Add Evidence"}
+                  </button>
+                </form>
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                  <div style={sectionTitleStyle}>Recorded Evidence</div>
+                  <button
+                    type="button"
+                    onClick={() => selectedCase && void loadEvidence(selectedCase.id)}
+                    disabled={evidenceLoading || evidenceSaving}
+                    style={secondaryButtonStyle}
+                  >
+                    {evidenceLoading ? "Loading..." : "Refresh"}
+                  </button>
+                </div>
+
+                {evidenceLoading ? (
+                  <div style={analyticsLoadingStyle}>Loading case evidence...</div>
+                ) : evidenceItems.length === 0 ? (
+                  <div style={{ ...analyticsEmptyStyle, marginTop: "8px" }}>
+                    No evidence items have been recorded for this case yet.
+                  </div>
+                ) : (
+                  <div style={{ marginTop: "8px", display: "grid", gap: "8px" }}>
+                    {evidenceItems.map((evidence) => (
+                      <div
+                        key={evidence.id}
+                        style={{
+                          border: "1px solid #334155",
+                          borderRadius: "7px",
+                          padding: "10px",
+                          background: "rgba(15, 23, 42, 0.72)",
+                        }}
+                      >
+                        {editingEvidenceId === evidence.id ? (
+                          <>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "7px" }}>
+                              <input
+                                value={editingEvidenceType}
+                                onChange={(event) => setEditingEvidenceType(event.target.value)}
+                                maxLength={50}
+                                style={inputStyle}
+                                disabled={evidenceSaving}
+                              />
+                              <input
+                                value={editingEvidenceTitle}
+                                onChange={(event) => setEditingEvidenceTitle(event.target.value)}
+                                maxLength={255}
+                                style={inputStyle}
+                                disabled={evidenceSaving}
+                              />
+                            </div>
+                            <textarea
+                              value={editingEvidenceDescription}
+                              onChange={(event) => setEditingEvidenceDescription(event.target.value)}
+                              maxLength={10000}
+                              rows={4}
+                              style={{ ...inputStyle, marginTop: "7px", resize: "vertical", lineHeight: 1.5 }}
+                              disabled={evidenceSaving}
+                            />
+                            <input
+                              value={editingEvidenceReference}
+                              onChange={(event) => setEditingEvidenceReference(event.target.value)}
+                              maxLength={1000}
+                              style={{ ...inputStyle, marginTop: "7px" }}
+                              disabled={evidenceSaving}
+                            />
+                            <div style={{ display: "flex", gap: "7px", marginTop: "7px" }}>
+                              <button
+                                type="button"
+                                onClick={() => void handleUpdateEvidence(evidence.id)}
+                                disabled={evidenceSaving}
+                                style={primaryButtonStyle}
+                              >
+                                {evidenceSaving ? "Saving..." : "Save Changes"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelEditingEvidence}
+                                disabled={evidenceSaving}
+                                style={secondaryButtonStyle}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "flex-start" }}>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ display: "flex", gap: "7px", alignItems: "center", flexWrap: "wrap" }}>
+                                  <strong style={{ color: "#f8fafc", fontSize: "12px", wordBreak: "break-word" }}>
+                                    {evidence.title}
+                                  </strong>
+                                  <span style={analyticsSeverityStyle}>
+                                    {evidence.evidence_type}
+                                  </span>
+                                </div>
+                                {evidence.description && (
+                                  <div style={{ marginTop: "6px", color: "#cbd5e1", fontSize: "10px", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                    {evidence.description}
+                                  </div>
+                                )}
+                                {evidence.reference && (
+                                  <div style={{ marginTop: "7px", color: "#60a5fa", fontSize: "9px", lineHeight: 1.45, wordBreak: "break-all" }}>
+                                    Reference: {evidence.reference}
+                                  </div>
+                                )}
+                                <div style={{ marginTop: "7px", color: "#64748b", fontSize: "8px" }}>
+                                  Added {new Date(evidence.created_at).toLocaleString()}
+                                  {evidence.updated_at !== evidence.created_at ? ` · Updated ${new Date(evidence.updated_at).toLocaleString()}` : ""}
+                                </div>
+                              </div>
+
+                              <div style={{ display: "flex", gap: "5px", flexShrink: 0 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => startEditingEvidence(evidence)}
+                                  disabled={evidenceSaving}
+                                  style={secondaryButtonStyle}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteEvidence(evidence.id)}
+                                  disabled={evidenceSaving}
+                                  style={{ ...secondaryButtonStyle, color: "#fca5a5", borderColor: "#7f1d1d" }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ML / AML ASSESSMENT */}
+
+          {selectedWallet && investigationTab === "ml-aml" && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>ML Risk + AML Assessment</div>
+                <div style={{ marginTop: "7px", fontSize: "10px", color: "#94a3b8", lineHeight: 1.5 }}>
+                  Research-stage machine-learning output and structured behavioral evidence for analyst review.
+                </div>
+                {!selectedWalletId ? (
+                  <div style={analyticsWarningStyle}>
+                    This traced wallet is not saved in the selected case. Select a case wallet to load ML and AML assessment.
+                  </div>
+                ) : (
+                  <button type="button" onClick={() => void handleLoadMlAml()} disabled={mlAmlLoading} style={{ ...primaryButtonStyle, marginTop: "10px" }}>
+                    {mlAmlLoading ? "Loading ML / AML..." : "Refresh ML / AML"}
+                  </button>
+                )}
+              </div>
+
+              {mlAmlLoading && <div style={analyticsLoadingStyle}>Loading ML risk and AML evidence assessment...</div>}
+
+              {mlRisk && (
+                <div style={panelSectionStyle}>
+                  <div style={sectionTitleStyle}>ML Risk</div>
+                  <div style={{ marginTop: "8px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                    <div style={analyticsStatStyle}><span>Prediction</span><strong>{mlRisk.prediction}</strong></div>
+                    <div style={analyticsStatStyle}><span>Model output</span><strong>{(mlRisk.probability * 100).toFixed(1)}%</strong></div>
+                    <div style={analyticsStatStyle}><span>Model version</span><strong>{mlRisk.model_version}</strong></div>
+                    <div style={analyticsStatStyle}><span>Schema version</span><strong>{mlRisk.schema_version}</strong></div>
+                  </div>
+                  <div style={mlNoticeStyle}>
+                    <strong>{mlRisk.status}</strong>
+                    <div style={{ marginTop: "4px", lineHeight: 1.5 }}>{mlRisk.notice}</div>
+                  </div>
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={sectionTitleStyle}>Model Features</div>
+                    <div style={{ marginTop: "7px" }}>
+                      {Object.entries(mlRisk.features).map(([name, value]) => (
+                        <div key={name} style={featureRowStyle}>
+                          <span style={{ color: "#94a3b8", wordBreak: "break-word" }}>{name}</span>
+                          <strong style={{ textAlign: "right", wordBreak: "break-word" }}>{formatMlValue(value)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {amlAssessment && (
+                <div style={panelSectionStyle}>
+                  <div style={sectionTitleStyle}>AML Evidence Assessment</div>
+                  <div style={{ marginTop: "8px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+                    <div style={analyticsStatStyle}><span>Review status</span><strong>{amlAssessment.review_status}</strong></div>
+                    <div style={analyticsStatStyle}><span>Assessment type</span><strong>{amlAssessment.assessment_type}</strong></div>
+                    <div style={analyticsStatStyle}><span>Indicators</span><strong>{amlAssessment.indicator_count}</strong></div>
+                    <div style={analyticsStatStyle}><span>High severity</span><strong>{amlAssessment.high_severity_indicator_count}</strong></div>
+                  </div>
+                  <div style={{ marginTop: "12px" }}>
+                    <div style={sectionTitleStyle}>Behavioral Indicators</div>
+                    {amlAssessment.signals.length === 0 ? (
+                      <div style={analyticsEmptyStyle}>No AML indicators returned.</div>
+                    ) : (
+                      amlAssessment.signals.map((signal, index) => (
+                        <div
+                          key={`aml-signal-${index}`}
+                          style={{
+                            ...amlIndicatorStyle,
+                            color: "#f8fafc",
+                            minHeight: "70px",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: "8px",
+                              alignItems: "center",
+                            }}
+                          >
+                            <strong
+                              style={{
+                                color: "#f8fafc",
+                                fontSize: "12px",
+                                wordBreak: "break-word",
+                              }}
+                            >
+                              {signal.signal}
+                            </strong>
+
+                            <span
+                              style={{
+                                ...analyticsSeverityStyle,
+                                color: "#fbbf24",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {signal.severity}
+                            </span>
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: "4px",
+                              color: "#64748b",
+                              fontSize: "9px",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Source: {signal.source}
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: "6px",
+                              color: "#cbd5e1",
+                              lineHeight: 1.45,
+                              fontSize: "11px",
+                            }}
+                          >
+                            {signal.reason}
+                          </div>
+
+                          {Object.keys(signal.evidence ?? {}).length > 0 && (
+                            <details
+                              style={{
+                                marginTop: "8px",
+                                color: "#94a3b8",
+                              }}
+                            >
+                              <summary
+                                style={{
+                                  cursor: "pointer",
+                                  color: "#60a5fa",
+                                }}
+                              >
+                                Evidence
+                              </summary>
+
+                              <pre
+                                style={{
+                                  ...evidencePreStyle,
+                                  marginTop: "6px",
+                                  whiteSpace: "pre-wrap",
+                                  overflowX: "auto",
+                                }}
+                              >
+                                {JSON.stringify(signal.evidence, null, 2)}
+                              </pre>
+                            </details>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <div style={amlDisclaimerStyle}>
+                    AML assessment is a structured research-stage evidence assessment. It does not by itself establish illicit activity or constitute a definitive AML determination.
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
           {/* TRANSACTION DETAILS */}
 
-          {selectedTransfer && (!selectedWallet || investigationTab === "transaction") && (
+          {selectedTransfer && investigationTab === "transaction" && (
             <>
               <div
                 style={
@@ -3977,6 +6142,99 @@ const graphControlButtonStyle = {
   fontSize: "11px",
   fontWeight: 600,
 } as const;
+
+function formatSeconds(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) {
+    return "—";
+  }
+
+  if (seconds < 60) {
+    return `${seconds.toFixed(0)}s`;
+  }
+
+  const minutes = seconds / 60;
+  if (minutes < 60) {
+    return `${minutes.toFixed(1)}m`;
+  }
+
+  const hours = minutes / 60;
+  if (hours < 24) {
+    return `${hours.toFixed(1)}h`;
+  }
+
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
+const analyticsStatStyle: React.CSSProperties = {
+  padding: "8px",
+  background: "#0f1117",
+  border: "1px solid #3b4254",
+  borderRadius: "6px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "3px",
+};
+
+const analyticsEmptyStyle: React.CSSProperties = {
+  marginTop: "7px",
+  padding: "8px",
+  color: "#64748b",
+  fontSize: "10px",
+  background: "#0f1117",
+  borderRadius: "5px",
+};
+
+const analyticsListItemStyle: React.CSSProperties = {
+  marginTop: "7px",
+  padding: "9px",
+  background: "#0f1117",
+  border: "1px solid #3b4254",
+  borderRadius: "6px",
+  fontSize: "10px",
+  lineHeight: 1.45,
+};
+
+const analyticsSignalStyle: React.CSSProperties = {
+  marginTop: "7px",
+  padding: "9px",
+  background: "#172033",
+  border: "1px solid #334155",
+  borderRadius: "6px",
+  fontSize: "10px",
+  lineHeight: 1.45,
+};
+
+const analyticsSeverityStyle: React.CSSProperties = {
+  marginLeft: "7px",
+  padding: "2px 5px",
+  borderRadius: "999px",
+  background: "#202a3d",
+  color: "#93c5fd",
+  fontSize: "8px",
+  textTransform: "uppercase",
+};
+
+function formatMlValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number") return Number.isFinite(value) ? formatNumber(value) : "—";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+const analyticsWarningStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#2a1f0b", border: "1px solid #92400e", borderRadius: "6px", color: "#fcd34d", fontSize: "11px", lineHeight: 1.5 };
+const analyticsLoadingStyle: React.CSSProperties = { padding: "14px", color: "#94a3b8", fontSize: "11px", textAlign: "center" };
+const mlNoticeStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#172033", border: "1px solid #334155", borderRadius: "6px", color: "#cbd5e1", fontSize: "10px", lineHeight: 1.45 };
+const featureRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "8px", padding: "6px 0", borderBottom: "1px solid #242b39", fontSize: "9px" };
+const amlIndicatorStyle: React.CSSProperties = { marginTop: "7px", padding: "9px", background: "#172033", border: "1px solid #3b4254", borderRadius: "6px", fontSize: "10px", lineHeight: 1.45 };
+const noteCardStyle: React.CSSProperties = { marginTop: "8px", padding: "10px", background: "#0f1117", border: "1px solid #3b4254", borderRadius: "6px" };
+const noteMetaStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: "8px", marginTop: "8px", color: "#64748b", fontSize: "8px", lineHeight: 1.4, flexWrap: "wrap" };
+const noteActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: "6px", marginTop: "8px" };
+const notePrimaryActionStyle: React.CSSProperties = { border: "1px solid #2563eb", borderRadius: "5px", padding: "5px 8px", background: "#2563eb", color: "#ffffff", cursor: "pointer", fontSize: "9px", fontWeight: 700 };
+const noteSecondaryActionStyle: React.CSSProperties = { border: "1px solid #475569", borderRadius: "5px", padding: "5px 8px", background: "#272d3a", color: "#cbd5e1", cursor: "pointer", fontSize: "9px", fontWeight: 700 };
+const noteDangerActionStyle: React.CSSProperties = { border: "1px solid #7f1d1d", borderRadius: "5px", padding: "5px 8px", background: "#2a1518", color: "#fca5a5", cursor: "pointer", fontSize: "9px", fontWeight: 700 };
+const evidencePreStyle: React.CSSProperties = { margin: "6px 0 0", padding: "8px", maxHeight: "180px", overflow: "auto", background: "#0f1117", borderRadius: "5px", color: "#cbd5e1", fontSize: "9px", whiteSpace: "pre-wrap", wordBreak: "break-word" };
+const amlDisclaimerStyle: React.CSSProperties = { marginTop: "12px", padding: "9px", background: "#0f1117", border: "1px solid #3b4254", borderRadius: "6px", color: "#94a3b8", fontSize: "9px", lineHeight: 1.5 };
 
 /* =========================
    RISK DASHBOARD
@@ -4767,6 +7025,20 @@ const labelStyle: React.CSSProperties =
       "5px",
   };
 
+const secondaryButtonStyle: React.CSSProperties =
+  {
+    width: "auto",
+    marginTop: 0,
+    padding: "7px 10px",
+    background: "#111827",
+    color: "#cbd5e1",
+    border: "1px solid #334155",
+    borderRadius: "6px",
+    cursor: "pointer",
+    fontWeight: 600,
+    fontSize: "10px",
+  };
+
 const primaryButtonStyle: React.CSSProperties =
   {
     width: "100%",
@@ -4909,4 +7181,15 @@ const detailRowStyle: React.CSSProperties =
       "#cbd5e1",
   };
 
+
 export default App;
+
+
+
+
+
+
+
+
+
+

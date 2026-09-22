@@ -16,6 +16,10 @@ from app.services.advanced_risk import analyze_wallet_advanced_risk
 from app.services.graph_analytics import analyze_wallet_graph_analytics
 from app.services.timeline import analyze_wallet_timeline
 from app.services.exposure import analyze_risk_exposure
+from app.services.ml_features import build_ml_features
+from app.services.ml_model import get_ml_model
+from app.services.aml_determination import build_aml_evidence_assessment
+from app.services.vasp_attribution import analyze_vasp_attribution
 
 
 router = APIRouter(
@@ -104,6 +108,8 @@ def generate_case_report(
             "graph": None,
             "timeline": None,
             "intelligence": None,
+            "ml": None,
+            "aml": None,
         }
 
         # -----------------------------------------------------
@@ -154,6 +160,65 @@ def generate_case_report(
         except Exception:
             analysis["intelligence"] = None
 
+        # -----------------------------------------------------
+        # Research-stage ML Analysis + AML Evidence Assessment
+        # -----------------------------------------------------
+
+        try:
+            # Reuse the same graph/timeline data already collected
+            # for this report. This avoids another blockchain request.
+            if analysis["graph"] is not None and analysis["timeline"] is not None:
+                ml_features = build_ml_features(
+                    behavior=analysis["graph"],
+                    graph=analysis["graph"],
+                    timeline=analysis["timeline"],
+                )
+
+                model = get_ml_model()
+                ml_result = model.predict(ml_features)
+
+                analysis["ml"] = {
+                    "address": wallet.address,
+                    "chain": wallet.chain,
+                    "prediction": ml_result["prediction"],
+                    "probability": ml_result["probability"],
+                    "model_version": ml_result["model_version"],
+                    "schema_version": ml_result["schema_version"],
+                    "features": ml_result["feature_values"],
+                    "status": "research_candidate",
+                    "notice": (
+                        "This is a research-stage ML model output. "
+                        "The probability is not a validated real-world "
+                        "AML probability and is not a definitive "
+                        "illicit-activity determination."
+                    ),
+                }
+
+                analysis["aml"] = build_aml_evidence_assessment(
+                    graph=analysis["graph"],
+                    timeline=analysis["timeline"],
+                    ml_result=ml_result,
+                )
+        except (ValueError, FileNotFoundError):
+            analysis["ml"] = None
+            analysis["aml"] = None
+        except Exception:
+            # Report generation should remain available even if the
+            # research-stage ML model is unavailable.
+            analysis["ml"] = None
+            analysis["aml"] = None
+
+        # ---------------------------------------------------------
+        # VASP Attribution
+        # ---------------------------------------------------------
+        try:
+            analysis["vasp_attribution"] = analyze_vasp_attribution(
+                address=wallet.address,
+                chain=wallet.chain,
+                max_hops=2,
+            )
+        except Exception:
+            analysis["vasp_attribution"] = None
         wallet_analyses.append(analysis)
 
     # ---------------------------------------------------------
@@ -197,3 +262,4 @@ def generate_case_report(
             )
         },
     )
+
