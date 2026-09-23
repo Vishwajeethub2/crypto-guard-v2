@@ -14,6 +14,9 @@ from app.services.ingestion import (
 )
 from app.services.blockchain import validate_wallet_address
 from app.services.scoring import calculate_wallet_risk
+from app.services.peel_chain_analysis import analyze_peel_chain
+from app.services.cross_chain_analysis import analyze_cross_chain
+from app.services.candidate_linking import analyze_candidate_linking
 
 
 router = APIRouter(
@@ -191,6 +194,130 @@ def trace_wallet_api(
             "trace_count": len(traces),
             "traces": traces,
         }
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
+
+@router.get("/peel-chain/{address}")
+def analyze_peel_chain_api(
+    address: str,
+    chain: str = "ethereum",
+    max_hops: int = 5,
+    current_user=Depends(get_current_user),
+):
+    """
+    Analyze existing Neo4j transaction data for peel-chain candidates.
+
+    This endpoint does NOT perform live blockchain/API ingestion.
+    It only analyzes transaction data already stored in Neo4j.
+    """
+
+    if not validate_wallet_address(address):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid wallet address",
+        )
+
+    try:
+        result = analyze_peel_chain(
+            address=address,
+            chain=chain,
+            max_hops=max_hops,
+        )
+
+        return result
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
+
+@router.get("/cross-chain/{address}")
+def analyze_cross_chain_api(
+    address: str,
+    source_chain: str = "ethereum",
+    target_chain: str | None = None,
+    time_window_minutes: int = 120,
+    value_tolerance: float = 0.20,
+    current_user=Depends(get_current_user),
+):
+    """
+    Analyze existing Neo4j transaction data for possible cross-chain links.
+
+    This endpoint does NOT perform live blockchain/API ingestion.
+    It only analyzes transaction data already stored in Neo4j.
+
+    Cross-chain links are research candidates based on matching signals,
+    not confirmed bridge attribution.
+    """
+
+    if not validate_wallet_address(address):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid wallet address",
+        )
+
+    if time_window_minutes < 1 or time_window_minutes > 1440:
+        raise HTTPException(
+            status_code=400,
+            detail="time_window_minutes must be between 1 and 1440",
+        )
+
+    if value_tolerance < 0 or value_tolerance > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="value_tolerance must be between 0 and 1",
+        )
+
+    try:
+        return analyze_cross_chain(
+            address=address,
+            source_chain=source_chain,
+            target_chain=target_chain,
+            time_window_minutes=time_window_minutes,
+            value_tolerance=value_tolerance,
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
+
+@router.get("/candidate-linking/{address}")
+def analyze_candidate_linking_api(
+    address: str,
+    chain: str = "ethereum",
+    max_hops: int = 2,
+    current_user=Depends(get_current_user),
+):
+    """
+    Analyze existing VASP intelligence and transaction-path
+    evidence for candidate wallet-to-VASP links.
+
+    This endpoint does not perform live blockchain/API ingestion.
+    It uses existing intelligence and Neo4j transaction evidence.
+    """
+
+    if not validate_wallet_address(address):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid wallet address",
+        )
+
+    try:
+        return analyze_candidate_linking(
+            address=address,
+            chain=chain,
+            max_hops=max_hops,
+        )
 
     except ValueError as error:
         raise HTTPException(

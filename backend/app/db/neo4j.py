@@ -349,37 +349,83 @@ def trace_wallet(
         """
 
     else:
+        # "both" means the union of two directional flow traversals:
+        #   1. source -> outgoing flow
+        #   2. source <- incoming flow
+        #
+        # This avoids the expensive undirected traversal:
+        #   -[:TRANSFER*1..N]-
+        #
+        # which allows Neo4j to reverse relationship direction at every hop
+        # and can create a large number of zig-zag path combinations.
         query = f"""
-        MATCH path = (
-            source:Wallet {{
-                address: $address,
-                chain: $chain
-            }}
-        )-[:TRANSFER*1..{max_hops}]-(target:Wallet)
-
-        WHERE target.address <> source.address
-          AND ALL(
-              node IN nodes(path)
-              WHERE SINGLE(
-                  other IN nodes(path)
-                  WHERE other.address = node.address
-              )
-          )
-
-        RETURN
-            [node IN nodes(path) | node.address] AS wallets,
-
-            [rel IN relationships(path) |
-                {{
-                    transaction_hash: rel.transaction_hash,
-                    asset: rel.asset,
-                    value: rel.value,
-                    category: rel.category,
-                    block_number: rel.block_number,
-                    timestamp: rel.timestamp,
-                    contract_address: rel.contract_address
+        CALL () {{
+            MATCH path = (
+                source:Wallet {{
+                    address: $address,
+                    chain: $chain
                 }}
-            ] AS transfers
+            )-[:TRANSFER*1..{max_hops}]->(target:Wallet)
+
+            WHERE target.address <> source.address
+              AND ALL(
+                  node IN nodes(path)
+                  WHERE SINGLE(
+                      other IN nodes(path)
+                      WHERE other.address = node.address
+                  )
+              )
+
+            RETURN
+                [node IN nodes(path) | node.address] AS wallets,
+
+                [rel IN relationships(path) |
+                    {{
+                        transaction_hash: rel.transaction_hash,
+                        asset: rel.asset,
+                        value: rel.value,
+                        category: rel.category,
+                        block_number: rel.block_number,
+                        timestamp: rel.timestamp,
+                        contract_address: rel.contract_address
+                    }}
+                ] AS transfers
+
+            UNION ALL
+
+            MATCH path = (
+                source:Wallet {{
+                    address: $address,
+                    chain: $chain
+                }}
+            )<-[:TRANSFER*1..{max_hops}]-(target:Wallet)
+
+            WHERE target.address <> source.address
+              AND ALL(
+                  node IN nodes(path)
+                  WHERE SINGLE(
+                      other IN nodes(path)
+                      WHERE other.address = node.address
+                  )
+              )
+
+            RETURN
+                [node IN nodes(path) | node.address] AS wallets,
+
+                [rel IN relationships(path) |
+                    {{
+                        transaction_hash: rel.transaction_hash,
+                        asset: rel.asset,
+                        value: rel.value,
+                        category: rel.category,
+                        block_number: rel.block_number,
+                        timestamp: rel.timestamp,
+                        contract_address: rel.contract_address
+                    }}
+                ] AS transfers
+        }}
+
+        RETURN wallets, transfers
         """
 
     with get_neo4j_session() as session:
@@ -485,6 +531,257 @@ def trace_wallet(
 
         return traces
 
+def get_peel_chain_candidates(
+    address: str,
+    chain: str = "ethereum",
+    max_hops: int = 5,
+):
+    """
+    Retrieve directional outgoing paths from a wallet for peel-chain analysis.
+
+    This function ONLY reads existing Neo4j data.
+    It does NOT call Alchemy or any external blockchain API.
+
+    For every sequential hop, the returned transfer data contains:
+    - sender wallet
+    - receiver wallet
+    - transaction hash
+    - asset
+    - value
+    - timestamp
+    - block number
+    - contract address
+
+    The explicit sender/receiver fields allow the service layer to verify
+    that each outgoing transfer actually originates from the intermediate
+    wallet reached by the previous transfer.
+    """
+
+    if not address:
+        raise ValueError("Wallet address is required")
+
+    chain = chain.lower().strip()
+    address = address.lower().strip()
+
+    if max_hops < 2:
+        raise ValueError("max_hops must be at least 2")
+
+    if max_hops > 5:
+        raise ValueError("max_hops cannot exceed 5")
+
+    query = f"""
+    MATCH path =
+        (source:Wallet {{address: $address, chain: $chain}})
+        -[:TRANSFER*2..{max_hops}]->
+        (target:Wallet)
+
+    WHERE
+        target.address <> source.address
+        AND ALL(
+            node IN nodes(path)
+            WHERE SINGLE(
+                other IN nodes(path)
+                WHERE other.address = node.address
+            )
+        )
+
+    WITH
+        path,
+        nodes(path) AS wallets,
+        relationships(path) AS transfers
+
+    RETURN
+        [
+            wallet IN wallets |
+            {{
+                address: wallet.address,
+                chain: wallet.chain
+            }}
+        ] AS wallets,
+
+        [
+            index IN range(0, size(transfers) - 1) |
+            {{
+                from_address: wallets[index].address,
+                to_address: wallets[index + 1].address,
+
+                from_chain: wallets[index].chain,
+                to_chain: wallets[index + 1].chain,
+
+                transaction_hash: transfers[index].transaction_hash,
+                chain: transfers[index].chain,
+                asset: transfers[index].asset,
+                value: transfers[index].value,
+                category: transfers[index].category,
+                block_number: transfers[index].block_number,
+                timestamp: transfers[index].timestamp,
+                contract_address: transfers[index].contract_address
+            }}
+        ] AS transfers
+
+    LIMIT 500
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+            chain=chain,
+        )
+
+        return [record.data() for record in result]
+
+
+def get_cross_chain_transfer_candidates(
+    address: str,
+    source_chain: str = "ethereum",
+    target_chain: str | None = None,
+    time_window_minutes: int = 120,
+    value_tolerance: float = 0.20,
+    limit: int = 250,
+):
+    """
+    Retrieve cross-chain transfer pairs from existing Neo4j data.
+
+    This function ONLY reads transfers already stored in Neo4j.
+    It does NOT call Alchemy or any external blockchain API.
+
+    A candidate is formed when:
+    - the source wallet sends a transfer on source_chain;
+    - another transfer exists on a different chain;
+    - the two transfers occur within the requested time window;
+    - their values are within the requested relative tolerance.
+
+    The result is a research candidate, not confirmed bridge attribution.
+    """
+
+    if not address:
+        raise ValueError("Wallet address is required")
+
+    source_chain = source_chain.lower().strip()
+    target_chain = target_chain.lower().strip() if target_chain else None
+
+    if time_window_minutes < 1 or time_window_minutes > 1440:
+        raise ValueError("time_window_minutes must be between 1 and 1440")
+
+    if value_tolerance < 0 or value_tolerance > 1:
+        raise ValueError("value_tolerance must be between 0 and 1")
+
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    address = address.lower().strip()
+    window_seconds = time_window_minutes * 60
+
+    query = """
+    MATCH (
+        source_wallet:Wallet {
+            address: $address,
+            chain: $source_chain
+        }
+    )-[outgoing:TRANSFER]->(source_receiver:Wallet)
+
+    WHERE outgoing.chain = $source_chain
+      AND outgoing.timestamp IS NOT NULL
+      AND outgoing.value IS NOT NULL
+
+    MATCH (
+        destination_sender:Wallet
+    )-[incoming:TRANSFER]->(destination_wallet:Wallet)
+
+    WHERE incoming.chain <> $source_chain
+      AND ($target_chain IS NULL OR incoming.chain = $target_chain)
+      AND incoming.timestamp IS NOT NULL
+      AND incoming.value IS NOT NULL
+
+    WITH
+        source_wallet,
+        source_receiver,
+        outgoing,
+        destination_sender,
+        destination_wallet,
+        incoming,
+        abs(
+            duration.inSeconds(
+                datetime(outgoing.timestamp),
+                datetime(incoming.timestamp)
+            ).seconds
+        ) AS time_gap_seconds
+
+    WHERE time_gap_seconds <= $window_seconds
+
+    WITH
+        source_wallet,
+        source_receiver,
+        outgoing,
+        destination_sender,
+        destination_wallet,
+        incoming,
+        time_gap_seconds,
+        abs(
+            toFloat(outgoing.value) - toFloat(incoming.value)
+        ) AS value_difference,
+        CASE
+            WHEN abs(toFloat(outgoing.value)) = 0
+            THEN NULL
+            ELSE abs(
+                toFloat(outgoing.value) - toFloat(incoming.value)
+            ) / abs(toFloat(outgoing.value))
+        END AS value_difference_ratio
+
+    WHERE value_difference_ratio IS NULL
+       OR value_difference_ratio <= $value_tolerance
+
+    RETURN
+        source_wallet.address AS source_address,
+        source_wallet.chain AS source_chain,
+        source_receiver.address AS source_receiver_address,
+        outgoing.chain AS source_transfer_chain,
+        outgoing.transaction_hash AS source_transaction_hash,
+        outgoing.asset AS source_asset,
+        outgoing.value AS source_value,
+        outgoing.category AS source_category,
+        outgoing.block_number AS source_block_number,
+        outgoing.timestamp AS source_timestamp,
+        outgoing.contract_address AS source_contract_address,
+
+        destination_sender.address AS destination_sender_address,
+        destination_sender.chain AS destination_sender_chain,
+        destination_wallet.address AS destination_address,
+        destination_wallet.chain AS destination_chain,
+        incoming.chain AS destination_transfer_chain,
+        incoming.transaction_hash AS destination_transaction_hash,
+        incoming.asset AS destination_asset,
+        incoming.value AS destination_value,
+        incoming.category AS destination_category,
+        incoming.block_number AS destination_block_number,
+        incoming.timestamp AS destination_timestamp,
+        incoming.contract_address AS destination_contract_address,
+
+        time_gap_seconds,
+        value_difference
+        ,
+        value_difference_ratio
+
+    ORDER BY
+        time_gap_seconds ASC,
+        value_difference_ratio ASC
+
+    LIMIT $limit
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+            source_chain=source_chain,
+            target_chain=target_chain,
+            window_seconds=window_seconds,
+            value_tolerance=value_tolerance,
+            limit=limit,
+        )
+
+        return [dict(record) for record in result]
 
 def create_test_chain():
     transactions = [

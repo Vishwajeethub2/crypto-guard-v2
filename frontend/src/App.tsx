@@ -67,6 +67,143 @@ type TraceResponse = {
   traces: Trace[];
 };
 
+type PeelTransfer = {
+  asset: string | null;
+  block_number: number | null;
+  category: string | null;
+  chain: string | null;
+  contract_address: string | null;
+  from_address: string;
+  from_chain: string | null;
+  timestamp: string | null;
+  to_address: string;
+  to_chain: string | null;
+  transaction_hash: string;
+  value: number;
+};
+
+type PeelHopValue = {
+  from_transaction: string;
+  to_transaction: string;
+  input_value: number;
+  forwarded_value: number;
+  value_difference: number;
+  value_reduction: boolean;
+  retained_amount: number;
+  forward_ratio: number | null;
+  retention_ratio: number | null;
+};
+
+type PeelCandidate = {
+  wallets: { address: string; chain: string }[];
+  hop_count: number;
+  wallet_count: number;
+  transfers: PeelTransfer[];
+  value_progression: {
+    input_value: number | null;
+    output_value: number | null;
+    value_difference: number | null;
+    value_ratio: number | null;
+    values: number[];
+    available: boolean;
+    value_reduction: boolean;
+    retained_amount: number | null;
+    retention_ratio: number | null;
+    forward_ratio: number | null;
+  };
+  hop_value_progression: PeelHopValue[];
+  timing: {
+    timestamps_available: boolean;
+    timestamps: number[];
+    gaps_seconds: number[];
+    average_gap_seconds: number | null;
+    minimum_gap_seconds: number | null;
+    maximum_gap_seconds: number | null;
+    chronological: boolean;
+  };
+  same_asset: boolean;
+  evidence: string[];
+};
+
+type PeelChainResponse = {
+  address: string;
+  chain: string;
+  max_hops: number;
+  status: string;
+  candidate_count: number;
+  candidates: PeelCandidate[];
+  notice: string;
+};
+
+type CrossChainEvent = {
+  address?: string;
+  receiver_address?: string;
+  sender_address?: string;
+  chain: string | null;
+  transaction_hash: string;
+  asset: string | null;
+  value: number | null;
+  category: string | null;
+  block_number: number | null;
+  timestamp: string | null;
+  contract_address: string | null;
+};
+
+type CrossChainCandidate = {
+  source: CrossChainEvent;
+  destination: CrossChainEvent;
+  time_gap_seconds: number | null;
+  value_difference: number | null;
+  value_ratio: number | null;
+  asset_changed: boolean | null;
+  signals: string[];
+  signal_count: number;
+  confidence: number;
+  status: string;
+  evidence: string[];
+};
+
+type CrossChainResponse = {
+  address: string;
+  source_chain: string;
+  target_chain: string | null;
+  time_window_minutes: number;
+  value_tolerance: number;
+  status: string;
+  candidate_count: number;
+  candidates: CrossChainCandidate[];
+  notice: string;
+};
+
+type CandidateLinkCandidate = {
+  name: string | null;
+  address: string;
+  chain: string;
+  source: string | null;
+  risk_category: string | null;
+  confidence: number | null;
+  hop: number | null;
+  link_basis: string;
+  link_strength: string;
+  signals: string[];
+  signal_count: number;
+  evidence: string | null;
+  wallets: string[];
+  transfers: TraceTransfer[];
+  reason: string | null;
+};
+
+type CandidateLinkingResponse = {
+  address: string;
+  chain: string;
+  max_hops: number;
+  status: string;
+  candidate_count: number;
+  candidates: CandidateLinkCandidate[];
+  method: string;
+  notice: string;
+};
+
 type RiskIndicator = {
   indicator: string;
   severity: "low" | "medium" | "high" | "critical";
@@ -122,6 +259,8 @@ type WalletTransaction = {
   target: string;
   transfer: TraceTransfer;
   hop_count: number;
+  hop_number?: number;
+  source_type?: "trace" | "peel_chain" | "cross_chain";
 };
 
 type GraphCounterparty = {
@@ -377,6 +516,47 @@ function App() {
     useState<TraceResponse | null>(null);
 
   /* =========================
+     PEEL CHAIN STATE
+  ========================= */
+
+  const [peelMaxHops, setPeelMaxHops] =
+    useState("5");
+
+  const [peelChain, setPeelChain] =
+    useState<PeelChainResponse | null>(null);
+
+  const [peelLoading, setPeelLoading] =
+    useState(false);
+
+  const [peelFilter, setPeelFilter] =
+    useState("all");
+
+  const [peelSort, setPeelSort] =
+    useState("strongest");
+
+  const [selectedPeelCandidateKey, setSelectedPeelCandidateKey] =
+    useState<string | null>(null);
+
+  /* =========================
+     CROSS-CHAIN STATE
+  ========================= */
+
+  const [crossChainTarget, setCrossChainTarget] =
+    useState("all");
+
+  const [crossChainWindow, setCrossChainWindow] =
+    useState("120");
+
+  const [crossChainTolerance, setCrossChainTolerance] =
+    useState("20");
+
+  const [crossChain, setCrossChain] =
+    useState<CrossChainResponse | null>(null);
+
+  const [crossChainLoading, setCrossChainLoading] =
+    useState(false);
+
+  /* =========================
      RISK STATE
   ========================= */
 
@@ -433,6 +613,19 @@ function App() {
 
   const [vaspLabelSaving, setVaspLabelSaving] =
     useState(false);
+
+  /* =========================
+     CANDIDATE LINKING STATE
+  ========================= */
+
+  const [candidateLinking, setCandidateLinking] =
+    useState<CandidateLinkingResponse | null>(null);
+
+  const [candidateLinkingLoading, setCandidateLinkingLoading] =
+    useState(false);
+
+  const [candidateLinkingMaxHops, setCandidateLinkingMaxHops] =
+    useState("2");
 
   /* =========================
      NOTES STATE
@@ -545,6 +738,7 @@ function App() {
       | "analytics"
       | "ml-aml"
       | "vasp"
+      | "candidate-linking"
       | "notes"
       | "evidence"
     >("wallet");
@@ -1278,12 +1472,16 @@ function App() {
     setSelectedWalletId(null);
 
     setTrace(null);
+    setPeelChain(null);
+    setSelectedPeelCandidateKey(null);
+    setCrossChain(null);
     setRisk(null);
     setGraphAnalytics(null);
     setTimelineAnalytics(null);
     setMlRisk(null);
     setAmlAssessment(null);
     setVaspAttribution(null);
+    setCandidateLinking(null);
     setNotes([]);
     setNewNoteContent("");
     setEditingNoteId(null);
@@ -1585,12 +1783,16 @@ function App() {
       );
 
       setTrace(null);
+      setPeelChain(null);
+      setSelectedPeelCandidateKey(null);
+      setCrossChain(null);
       setRisk(null);
       setGraphAnalytics(null);
       setTimelineAnalytics(null);
       setMlRisk(null);
       setAmlAssessment(null);
       setVaspAttribution(null);
+      setCandidateLinking(null);
       setNodes([]);
       setEdges([]);
     } catch (err) {
@@ -1813,8 +2015,10 @@ function App() {
     setMlRisk(null);
     setAmlAssessment(null);
     setVaspAttribution(null);
+    setCandidateLinking(null);
     setSelectedWallet(null);
     setSelectedTransfer(null);
+    setSelectedPeelCandidateKey(null);
 
     try {
       const response = await fetch(
@@ -2140,6 +2344,186 @@ function App() {
   }
 
   /* =========================
+     PEEL CHAIN ANALYSIS
+  ========================= */
+
+  async function handlePeelChainAnalysis() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedCase) {
+      setError("Create or select a case first.");
+      return;
+    }
+
+    const hops = Number(peelMaxHops);
+    if (!Number.isInteger(hops) || hops < 2 || hops > 5) {
+      setError("Peel Chain max hops must be between 2 and 5.");
+      return;
+    }
+
+    setPeelLoading(true);
+    setError(null);
+    setSelectedPeelCandidateKey(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/wallets/peel-chain/${address}?chain=${encodeURIComponent(chain)}&max_hops=${hops}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message || `Peel Chain API returned ${response.status}`,
+        );
+      }
+
+      const data: PeelChainResponse = await response.json();
+      setPeelChain(data);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Peel Chain analysis failed",
+      );
+    } finally {
+      setPeelLoading(false);
+    }
+  }
+
+  /* =========================
+     CROSS-CHAIN ANALYSIS
+  ========================= */
+
+  async function handleCrossChainAnalysis() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedCase) {
+      setError("Create or select a case first.");
+      return;
+    }
+
+    const windowMinutes = Number(crossChainWindow);
+    const tolerancePercent = Number(crossChainTolerance);
+
+    if (
+      !Number.isInteger(windowMinutes) ||
+      windowMinutes < 1 ||
+      windowMinutes > 1440
+    ) {
+      setError("Cross-Chain time window must be between 1 and 1440 minutes.");
+      return;
+    }
+
+    if (
+      !Number.isFinite(tolerancePercent) ||
+      tolerancePercent < 0 ||
+      tolerancePercent > 100
+    ) {
+      setError("Cross-Chain value tolerance must be between 0 and 100%.");
+      return;
+    }
+
+    setCrossChainLoading(true);
+    setError(null);
+
+    try {
+      const target =
+        crossChainTarget !== "all"
+          ? `&target_chain=${encodeURIComponent(crossChainTarget)}`
+          : "";
+
+      const response = await fetch(
+        `${API_URL}/wallets/cross-chain/${address}?source_chain=${encodeURIComponent(
+          chain,
+        )}&time_window_minutes=${windowMinutes}&value_tolerance=${
+          tolerancePercent / 100
+        }${target}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message ||
+            `Cross-Chain API returned ${response.status}`,
+        );
+      }
+
+      const data: CrossChainResponse = await response.json();
+      setCrossChain(data);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Cross-Chain analysis failed",
+      );
+    } finally {
+      setCrossChainLoading(false);
+    }
+  }
+
+  function handleInspectCrossChainTransfer(
+    event: CrossChainEvent,
+    side: "source" | "destination",
+  ) {
+    const sourceAddress =
+      side === "source"
+        ? event.address ?? ""
+        : event.sender_address ?? "";
+
+    const targetAddress =
+      side === "source"
+        ? event.receiver_address ?? ""
+        : event.address ?? "";
+
+    setSelectedWallet(null);
+    setSelectedTransfer({
+      source: sourceAddress,
+      target: targetAddress,
+      transfer: {
+        transaction_hash: event.transaction_hash,
+        asset: event.asset,
+        value: event.value,
+        category: event.category,
+        block_number: event.block_number,
+        timestamp: event.timestamp,
+        contract_address: event.contract_address,
+      },
+      hop_count: 1,
+      hop_number: side === "source" ? 1 : 2,
+      source_type: "cross_chain",
+    });
+    setInvestigationTab("transaction");
+  }
+
+  /* =========================
      RISK ANALYSIS
   ========================= */
 
@@ -2387,6 +2771,67 @@ function App() {
       setError(err instanceof Error ? err.message : "Failed to load VASP attribution");
     } finally {
       setVaspLoading(false);
+    }
+  }
+
+  async function handleCandidateLinking() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedWallet) {
+      setError("Select a wallet from the investigation graph first.");
+      return;
+    }
+
+    const hops = Number(candidateLinkingMaxHops);
+    if (!Number.isInteger(hops) || hops < 0 || hops > 2) {
+      setError("Candidate Linking max hops must be between 0 and 2.");
+      return;
+    }
+
+    setCandidateLinkingLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/wallets/candidate-linking/${selectedWallet}?chain=${encodeURIComponent(
+          chain,
+        )}&max_hops=${hops}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message ||
+            `Candidate Linking API returned ${response.status}`,
+        );
+      }
+
+      const data: CandidateLinkingResponse =
+        await response.json();
+
+      setCandidateLinking(data);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Candidate Linking failed",
+      );
+    } finally {
+      setCandidateLinkingLoading(false);
     }
   }
 
@@ -2731,8 +3176,189 @@ function App() {
   }
 
   /* =========================
+     PEEL CHAIN GRAPH HIGHLIGHTING
+  ========================= */
+
+  function getPeelCandidateKey(candidate: PeelCandidate): string {
+    const firstTransaction =
+      candidate.transfers[0]?.transaction_hash ??
+      candidate.wallets[0]?.address ??
+      "";
+
+    const lastTransaction =
+      candidate.transfers[candidate.transfers.length - 1]?.transaction_hash ??
+      candidate.wallets[candidate.wallets.length - 1]?.address ??
+      "";
+
+    return `${firstTransaction}:${lastTransaction}`.toLowerCase();
+  }
+
+  function handleSelectPeelCandidate(candidate: PeelCandidate) {
+    setSelectedPeelCandidateKey(
+      getPeelCandidateKey(candidate),
+    );
+  }
+
+  function handleInspectPeelTransfer(
+    candidate: PeelCandidate,
+    transfer: PeelTransfer,
+    transferIndex: number,
+  ) {
+    setSelectedWallet(null);
+    setSelectedTransfer({
+      source: transfer.from_address,
+      target: transfer.to_address,
+      transfer: {
+        transaction_hash: transfer.transaction_hash,
+        asset: transfer.asset,
+        value: transfer.value,
+        category: transfer.category,
+        block_number: transfer.block_number,
+        timestamp: transfer.timestamp,
+        contract_address: transfer.contract_address,
+      },
+      hop_count: candidate.hop_count,
+      hop_number: transferIndex + 1,
+      source_type: "peel_chain",
+    });
+    setInvestigationTab("transaction");
+  }
+
+  function clearPeelCandidateSelection() {
+    setSelectedPeelCandidateKey(null);
+  }
+
+  /* =========================
      RENDER
   ========================= */
+
+  const filteredPeelCandidates = (() => {
+    if (!peelChain) {
+      return [];
+    }
+
+    const filtered = peelChain.candidates.filter((candidate) => {
+      const pattern = getPeelPatternAssessment(candidate);
+
+      switch (peelFilter) {
+        case "strong":
+          return pattern.label === "Strong pattern";
+        case "same-asset":
+          return candidate.same_asset;
+        case "value-reduced":
+          return candidate.value_progression.value_reduction;
+        case "chronological":
+          return candidate.timing.chronological;
+        default:
+          return true;
+      }
+    });
+
+    return [...filtered].sort((left, right) => {
+      const leftPattern = getPeelPatternAssessment(left);
+      const rightPattern = getPeelPatternAssessment(right);
+
+      switch (peelSort) {
+        case "hops":
+          return right.hop_count - left.hop_count;
+        case "retained":
+          return (right.value_progression.retained_amount ?? 0) -
+            (left.value_progression.retained_amount ?? 0);
+        case "gap":
+          return (left.timing.average_gap_seconds ?? Number.POSITIVE_INFINITY) -
+            (right.timing.average_gap_seconds ?? Number.POSITIVE_INFINITY);
+        case "strongest":
+        default:
+          return rightPattern.signalCount - leftPattern.signalCount ||
+            right.hop_count - left.hop_count;
+      }
+    });
+  })();
+
+  const highlightedPeelCandidate =
+    peelChain?.candidates.find(
+      (candidate) =>
+        getPeelCandidateKey(candidate) ===
+        selectedPeelCandidateKey,
+    ) ?? null;
+
+  const highlightedPeelWallets = new Set(
+    (highlightedPeelCandidate?.wallets ?? []).map(
+      (wallet) => wallet.address.toLowerCase(),
+    ),
+  );
+
+  const highlightedPeelConnections = new Set(
+    (highlightedPeelCandidate?.wallets ?? [])
+      .slice(0, -1)
+      .map((wallet, index) => {
+        const nextWallet =
+          highlightedPeelCandidate?.wallets[index + 1];
+
+        return nextWallet
+          ? `${wallet.address.toLowerCase()}->${nextWallet.address.toLowerCase()}`
+          : null;
+      })
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  const graphNodes = filteredNodes.map((node) => {
+    if (!highlightedPeelCandidate) {
+      return node;
+    }
+
+    const isHighlighted = highlightedPeelWallets.has(
+      String(node.id).toLowerCase(),
+    );
+
+    return {
+      ...node,
+      style: {
+        ...(node.style ?? {}),
+        border: isHighlighted
+          ? "3px solid #5eead4"
+          : "1px solid #334155",
+        background: isHighlighted
+          ? "#123b36"
+          : "#0f172a",
+        boxShadow: isHighlighted
+          ? "0 0 18px rgba(94,234,212,0.35)"
+          : "none",
+        opacity: isHighlighted ? 1 : 0.35,
+      },
+    };
+  });
+
+  const graphEdges = filteredEdges.map((edge) => {
+    if (!highlightedPeelCandidate) {
+      return edge;
+    }
+
+    const connectionKey =
+      `${String(edge.source).toLowerCase()}->${String(edge.target).toLowerCase()}`;
+    const reverseConnectionKey =
+      `${String(edge.target).toLowerCase()}->${String(edge.source).toLowerCase()}`;
+
+    const isHighlighted =
+      highlightedPeelConnections.has(connectionKey) ||
+      highlightedPeelConnections.has(reverseConnectionKey);
+
+    return {
+      ...edge,
+      animated: isHighlighted,
+      style: {
+        ...(edge.style ?? {}),
+        strokeWidth: isHighlighted ? 5 : 1,
+        stroke: isHighlighted ? "#5eead4" : "#475569",
+        opacity: isHighlighted ? 1 : 0.2,
+      },
+      labelStyle: {
+        ...(edge.labelStyle ?? {}),
+        opacity: isHighlighted ? 1 : 0.25,
+        fontWeight: isHighlighted ? 800 : 600,
+      },
+    };
+  });
 
   return (
     <main
@@ -4169,6 +4795,907 @@ function App() {
                 </div>
               )}
 
+              {/* PEEL CHAIN ANALYSIS */}
+
+              <div
+                style={{
+                  marginTop: "14px",
+                  paddingTop: "14px",
+                  borderTop: "1px solid #2f3545",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                  }}
+                >
+                  <div>
+                    <h3
+                      style={{
+                        margin: 0,
+                        fontSize: "15px",
+                      }}
+                    >
+                      Peel Chain Analysis
+                    </h3>
+                    <div
+                      style={{
+                        marginTop: "4px",
+                        fontSize: "10px",
+                        color: "#94a3b8",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      Research-stage analysis of sequential outgoing transfers already stored in Neo4j.
+                    </div>
+                  </div>
+                  {peelChain && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPeelChain(null);
+                        setSelectedPeelCandidateKey(null);
+                        setPeelFilter("all");
+                        setPeelSort("strongest");
+                      }}
+                      style={secondaryButtonStyle}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <label style={labelStyle}>Max Hops</label>
+                <select
+                  value={peelMaxHops}
+                  onChange={(event) => setPeelMaxHops(event.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="2">2 Hops</option>
+                  <option value="3">3 Hops</option>
+                  <option value="4">4 Hops</option>
+                  <option value="5">5 Hops</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={handlePeelChainAnalysis}
+                  disabled={peelLoading}
+                  style={{
+                    ...primaryButtonStyle,
+                    background: "#0f766e",
+                  }}
+                >
+                  {peelLoading ? "Analyzing Peel Chain..." : "Analyze Peel Chain"}
+                </button>
+
+                {peelChain && (
+                  <div style={{ marginTop: "14px" }}>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                        gap: "8px",
+                      }}
+                    >
+                      <div style={miniStatStyle}>
+                        <span>Status</span>
+                        <strong style={{ color: "#4ade80" }}>{peelChain.status}</strong>
+                      </div>
+                      <div style={miniStatStyle}>
+                        <span>Candidates</span>
+                        <strong>{peelChain.candidate_count}</strong>
+                      </div>
+                      <div style={miniStatStyle}>
+                        <span>Chain</span>
+                        <strong>{peelChain.chain}</strong>
+                      </div>
+                      <div style={miniStatStyle}>
+                        <span>Max Hops</span>
+                        <strong>{peelChain.max_hops}</strong>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        padding: "9px",
+                        border: "1px solid #334155",
+                        borderRadius: "7px",
+                        background: "#111827",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: "8px",
+                          marginBottom: "7px",
+                        }}
+                      >
+                        <span style={{ fontSize: "10px", color: "#cbd5e1" }}>Candidates</span>
+                        <span style={{ fontSize: "9px", color: "#94a3b8" }}>
+                          Showing {filteredPeelCandidates.length} of {peelChain.candidates.length}
+                        </span>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: "6px",
+                        }}
+                      >
+                        <select
+                          value={peelFilter}
+                          onChange={(event) => setPeelFilter(event.target.value)}
+                          style={{ ...inputStyle, marginBottom: 0, padding: "7px", fontSize: "10px" }}
+                        >
+                          <option value="all">All candidates</option>
+                          <option value="strong">Strong pattern</option>
+                          <option value="same-asset">Same asset</option>
+                          <option value="value-reduced">Value reduced</option>
+                          <option value="chronological">Chronological</option>
+                        </select>
+
+                        <select
+                          value={peelSort}
+                          onChange={(event) => setPeelSort(event.target.value)}
+                          style={{ ...inputStyle, marginBottom: 0, padding: "7px", fontSize: "10px" }}
+                        >
+                          <option value="strongest">Strongest pattern</option>
+                          <option value="hops">Most hops</option>
+                          <option value="retained">Highest retained amount</option>
+                          <option value="gap">Shortest average gap</option>
+                        </select>
+                      </div>
+
+                      {selectedPeelCandidateKey && (
+                        <button
+                          type="button"
+                          onClick={clearPeelCandidateSelection}
+                          style={{
+                            ...secondaryButtonStyle,
+                            width: "100%",
+                            marginTop: "7px",
+                            padding: "7px",
+                            fontSize: "10px",
+                          }}
+                        >
+                          Clear Graph Highlight
+                        </button>
+                      )}
+                    </div>
+
+                    {filteredPeelCandidates.length === 0 ? (
+                      <div
+                        style={{
+                          marginTop: "10px",
+                          padding: "12px",
+                          border: "1px solid #334155",
+                          borderRadius: "7px",
+                          color: "#94a3b8",
+                          fontSize: "10px",
+                          textAlign: "center",
+                        }}
+                      >
+                        No candidates match the selected filter.
+                      </div>
+                    ) : (
+                      filteredPeelCandidates.map((candidate, index) => {
+                      const firstValue = candidate.value_progression.input_value;
+                      const finalValue = candidate.value_progression.output_value;
+                      const firstAsset = candidate.transfers[0]?.asset ?? "Unknown";
+                      const gap = candidate.timing.average_gap_seconds;
+                      const pattern = getPeelPatternAssessment(candidate);
+
+                      return (
+                        <div
+                          key={`${candidate.transfers[0]?.transaction_hash ?? index}-${candidate.transfers[candidate.transfers.length - 1]?.transaction_hash ?? index}`}
+                          style={{
+                            marginTop: "10px",
+                            padding: "10px",
+                            background: "#0f1117",
+                            border: "1px solid #3b4254",
+                            borderRadius: "7px",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            <strong style={{ fontSize: "12px" }}>Candidate #{index + 1}</strong>
+                            <span
+                              style={{
+                                fontSize: "9px",
+                                padding: "3px 6px",
+                                borderRadius: "999px",
+                                background: "#123b36",
+                                color: "#5eead4",
+                              }}
+                            >
+                              {candidate.hop_count} hops
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleSelectPeelCandidate(candidate)
+                            }
+                            style={{
+                              width: "100%",
+                              marginTop: "7px",
+                              padding: "6px 8px",
+                              borderRadius: "5px",
+                              border: getPeelCandidateKey(candidate) === selectedPeelCandidateKey
+                                ? "1px solid #5eead4"
+                                : "1px solid #334155",
+                              background: getPeelCandidateKey(candidate) === selectedPeelCandidateKey
+                                ? "#123b36"
+                                : "#111827",
+                              color: getPeelCandidateKey(candidate) === selectedPeelCandidateKey
+                                ? "#5eead4"
+                                : "#cbd5e1",
+                              fontSize: "9px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {getPeelCandidateKey(candidate) === selectedPeelCandidateKey
+                              ? "Highlighted on Graph"
+                              : "Highlight on Graph"}
+                          </button>
+
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              padding: "7px 8px",
+                              border: "1px solid #334155",
+                              borderRadius: "6px",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: "8px",
+                              background: "#111827",
+                            }}
+                          >
+                            <span style={{ fontSize: "9px", color: "#94a3b8" }}>Pattern signals</span>
+                            <strong style={{ fontSize: "10px", color: pattern.color }}>
+                              {pattern.label} · {pattern.signalCount}/5
+                            </strong>
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: "9px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "0",
+                            }}
+                          >
+                            {candidate.wallets.map((wallet, walletIndex) => {
+                              const transfer = candidate.transfers[walletIndex];
+                              const shortAddress =
+                                wallet.address.length > 22
+                                  ? `${wallet.address.slice(0, 10)}...${wallet.address.slice(-8)}`
+                                  : wallet.address;
+
+                              return (
+                                <div key={`${wallet.address}-${walletIndex}`}>
+                                  <div
+                                    title={wallet.address}
+                                    style={{
+                                      padding: "8px 9px",
+                                      border: "1px solid #334155",
+                                      borderRadius: "6px",
+                                      background: walletIndex === 0 ? "#111827" : "#0f172a",
+                                      fontSize: "9px",
+                                      color: "#e2e8f0",
+                                      overflow: "hidden",
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        color: "#64748b",
+                                        fontSize: "8px",
+                                        marginBottom: "4px",
+                                        letterSpacing: "0.04em",
+                                      }}
+                                    >
+                                      {walletIndex === 0 ? "SOURCE" : `HOP ${walletIndex}`}
+                                    </div>
+                                    <div
+                                      style={{
+                                        whiteSpace: "nowrap",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        fontFamily: "monospace",
+                                      }}
+                                    >
+                                      {shortAddress}
+                                    </div>
+                                  </div>
+
+                                  {transfer && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleInspectPeelTransfer(
+                                          candidate,
+                                          transfer,
+                                          walletIndex,
+                                        )
+                                      }
+                                      title={`Inspect transaction ${transfer.transaction_hash}`}
+                                      style={{
+                                        width: "100%",
+                                        border: "none",
+                                        background: "transparent",
+                                        cursor: "pointer",
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        alignItems: "center",
+                                        padding: "4px 0",
+                                        color: "inherit",
+                                      }}
+                                    >
+                                      <span
+                                        style={{
+                                          fontSize: "12px",
+                                          lineHeight: 1,
+                                          color: "#5eead4",
+                                        }}
+                                      >
+                                        ↓
+                                      </span>
+                                      <span
+                                        style={{
+                                          marginTop: "2px",
+                                          fontSize: "8px",
+                                          color: "#5eead4",
+                                          whiteSpace: "nowrap",
+                                        }}
+                                      >
+                                        {formatNumber(transfer.value)} {transfer.asset ?? ""}
+                                      </span>
+                                      <span
+                                        style={{
+                                          marginTop: "3px",
+                                          fontSize: "7px",
+                                          color: "#60a5fa",
+                                        }}
+                                      >
+                                        Inspect transaction
+                                      </span>
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {candidate.hop_value_progression.length > 0 && (
+                            <div
+                              style={{
+                                marginTop: "9px",
+                                padding: "8px",
+                                border: "1px solid #334155",
+                                borderRadius: "6px",
+                                background: "#111827",
+                              }}
+                            >
+                              <div style={{ ...sectionTitleStyle, fontSize: "10px" }}>Value per Hop</div>
+                              <div style={{ marginTop: "6px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                                {candidate.hop_value_progression.map((hop, hopIndex) => (
+                                  <div
+                                    key={`${hop.from_transaction}-${hop.to_transaction}-${hopIndex}`}
+                                    style={{
+                                      padding: "7px",
+                                      border: "1px solid #273449",
+                                      borderRadius: "5px",
+                                    }}
+                                  >
+                                    <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "9px" }}>
+                                      <strong>Hop {hopIndex + 1} → {hopIndex + 2}</strong>
+                                      <span style={{ color: hop.value_reduction ? "#4ade80" : "#facc15" }}>
+                                        {hop.value_reduction ? "Reduced" : "No reduction"}
+                                      </span>
+                                    </div>
+                                    <div
+                                      style={{
+                                        marginTop: "5px",
+                                        display: "grid",
+                                        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                                        gap: "5px",
+                                      }}
+                                    >
+                                      <div style={miniStatStyle}>
+                                        <span>Input</span>
+                                        <strong>{formatNumber(hop.input_value)}</strong>
+                                      </div>
+                                      <div style={miniStatStyle}>
+                                        <span>Forwarded</span>
+                                        <strong>{formatNumber(hop.forwarded_value)}</strong>
+                                      </div>
+                                      <div style={miniStatStyle}>
+                                        <span>Retained</span>
+                                        <strong>{formatNumber(hop.retained_amount)}</strong>
+                                      </div>
+                                    </div>
+                                    <div style={{ marginTop: "5px", fontSize: "9px", color: "#94a3b8" }}>
+                                      Forward ratio: {
+                                        hop.forward_ratio === null || hop.forward_ratio === undefined
+                                          ? "—"
+                                          : `${(hop.forward_ratio * 100).toFixed(2)}%`
+                                      }
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              display: "grid",
+                              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                              gap: "5px",
+                            }}
+                          >
+                            <div style={miniStatStyle}>
+                              <span>Asset</span>
+                              <strong>{firstAsset}</strong>
+                            </div>
+                            <div style={miniStatStyle}>
+                              <span>Value</span>
+                              <strong>{formatNumber(firstValue)} → {formatNumber(finalValue)}</strong>
+                            </div>
+                            <div style={miniStatStyle}>
+                              <span>Reduction</span>
+                              <strong>{formatNumber(candidate.value_progression.retained_amount)}</strong>
+                            </div>
+                            <div style={miniStatStyle}>
+                              <span>Forward Ratio</span>
+                              <strong>
+                                {candidate.value_progression.forward_ratio === null ||
+                                candidate.value_progression.forward_ratio === undefined
+                                  ? "—"
+                                  : `${(candidate.value_progression.forward_ratio * 100).toFixed(2)}%`}
+                              </strong>
+                            </div>
+                            <div style={miniStatStyle}>
+                              <span>Average Gap</span>
+                              <strong>{gap === null ? "Unknown" : formatDuration(gap)}</strong>
+                            </div>
+                            <div style={miniStatStyle}>
+                              <span>Same Asset</span>
+                              <strong style={{ color: candidate.same_asset ? "#4ade80" : "#f87171" }}>
+                                {candidate.same_asset ? "Yes" : "No"}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: "9px" }}>
+                            <div style={sectionTitleStyle}>Evidence</div>
+                            <div style={{ marginTop: "5px" }}>
+                              {candidate.evidence.map((item, evidenceIndex) => (
+                                <div
+                                  key={`${index}-${evidenceIndex}`}
+                                  style={{
+                                    fontSize: "9px",
+                                    color: "#cbd5e1",
+                                    lineHeight: 1.5,
+                                  }}
+                                >
+                                  ✓ {item}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                    )}
+
+                    {peelChain.candidate_count === 0 && (
+                      <div
+                        style={{
+                          marginTop: "10px",
+                          padding: "10px",
+                          background: "#0f1117",
+                          border: "1px solid #3b4254",
+                          borderRadius: "6px",
+                          fontSize: "11px",
+                          color: "#94a3b8",
+                        }}
+                      >
+                        No validated peel-chain candidates were found in the stored graph data.
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        fontSize: "9px",
+                        color: "#64748b",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {peelChain.notice}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* CROSS-CHAIN ANALYSIS */}
+
+              <div
+                style={{
+                  marginTop: "14px",
+                  paddingTop: "14px",
+                  borderTop: "1px solid #2f3545",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                  }}
+                >
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: "15px" }}>
+                      Cross-Chain Analysis
+                    </h3>
+                    <div
+                      style={{
+                        marginTop: "4px",
+                        fontSize: "10px",
+                        color: "#94a3b8",
+                      }}
+                    >
+                      Research candidates from existing Neo4j data
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "10px",
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "8px",
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px",
+                      fontSize: "9px",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    Target Chain
+                    <select
+                      value={crossChainTarget}
+                      onChange={(event) =>
+                        setCrossChainTarget(event.target.value)
+                      }
+                      style={{
+                        padding: "7px",
+                        borderRadius: "5px",
+                        border: "1px solid #334155",
+                        background: "#111827",
+                        color: "#e2e8f0",
+                        fontSize: "10px",
+                      }}
+                    >
+                      <option value="all">All Other Chains</option>
+                      <option value="ethereum">Ethereum</option>
+                      <option value="polygon">Polygon</option>
+                      <option value="arbitrum">Arbitrum</option>
+                      <option value="base">Base</option>
+                      <option value="bsc">BSC</option>
+                      <option value="optimism">Optimism</option>
+                    </select>
+                  </label>
+
+                  <label
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px",
+                      fontSize: "9px",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    Time Window (min)
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={crossChainWindow}
+                      onChange={(event) =>
+                        setCrossChainWindow(event.target.value)
+                      }
+                      style={{
+                        padding: "7px",
+                        borderRadius: "5px",
+                        border: "1px solid #334155",
+                        background: "#111827",
+                        color: "#e2e8f0",
+                        fontSize: "10px",
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <label
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                    marginTop: "8px",
+                    fontSize: "9px",
+                    color: "#94a3b8",
+                  }}
+                >
+                  Value Tolerance (%)
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={crossChainTolerance}
+                    onChange={(event) =>
+                      setCrossChainTolerance(event.target.value)
+                    }
+                    style={{
+                      padding: "7px",
+                      borderRadius: "5px",
+                      border: "1px solid #334155",
+                      background: "#111827",
+                      color: "#e2e8f0",
+                      fontSize: "10px",
+                    }}
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleCrossChainAnalysis}
+                  disabled={crossChainLoading}
+                  style={{
+                    width: "100%",
+                    marginTop: "9px",
+                    padding: "8px",
+                    borderRadius: "5px",
+                    border: "1px solid #2563eb",
+                    background: crossChainLoading ? "#1e293b" : "#172554",
+                    color: "#93c5fd",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    cursor: crossChainLoading ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {crossChainLoading
+                    ? "Analyzing Cross-Chain..."
+                    : "Analyze Cross-Chain"}
+                </button>
+
+                {crossChain && (
+                  <div
+                    style={{
+                      marginTop: "10px",
+                      padding: "8px",
+                      border: "1px solid #334155",
+                      borderRadius: "6px",
+                      background: "#0f172a",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(3, 1fr)",
+                        gap: "6px",
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: "8px", color: "#64748b" }}>
+                          STATUS
+                        </div>
+                        <strong style={{ fontSize: "9px", color: "#93c5fd" }}>
+                          {crossChain.status}
+                        </strong>
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: "8px", color: "#64748b" }}>
+                          CANDIDATES
+                        </div>
+                        <strong style={{ fontSize: "9px", color: "#e2e8f0" }}>
+                          {crossChain.candidate_count}
+                        </strong>
+                      </div>
+
+                      <div>
+                        <div style={{ fontSize: "8px", color: "#64748b" }}>
+                          SOURCE
+                        </div>
+                        <strong style={{ fontSize: "9px", color: "#e2e8f0" }}>
+                          {crossChain.source_chain}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "7px",
+                        fontSize: "8px",
+                        color: "#94a3b8",
+                      }}
+                    >
+                      Window: {crossChain.time_window_minutes} min · Tolerance:{" "}
+                      {(crossChain.value_tolerance * 100).toFixed(0)}%
+                    </div>
+                  </div>
+                )}
+
+                {crossChain?.candidates.map((candidate, index) => (
+                  <div
+                    key={`${candidate.source.transaction_hash}-${candidate.destination.transaction_hash}-${index}`}
+                    style={{
+                      marginTop: "9px",
+                      padding: "9px",
+                      background: "#0f1117",
+                      border: "1px solid #3b4254",
+                      borderRadius: "7px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <strong style={{ fontSize: "11px" }}>
+                        Candidate #{index + 1}
+                      </strong>
+
+                      <span
+                        style={{
+                          fontSize: "8px",
+                          padding: "3px 6px",
+                          borderRadius: "999px",
+                          background: "#172554",
+                          color: "#93c5fd",
+                        }}
+                      >
+                        {(candidate.confidence * 100).toFixed(0)}% signal
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "7px",
+                        fontSize: "8px",
+                        color: "#94a3b8",
+                      }}
+                    >
+                      {candidate.source.chain ?? "Unknown"} →{" "}
+                      {candidate.destination.chain ?? "Unknown"} ·{" "}
+                      {candidate.time_gap_seconds !== null
+                        ? `${candidate.time_gap_seconds.toFixed(0)}s gap`
+                        : "time unavailable"}
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "7px",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "4px",
+                      }}
+                    >
+                      {candidate.signals.map((signal) => (
+                        <span
+                          key={signal}
+                          style={{
+                            padding: "3px 5px",
+                            borderRadius: "999px",
+                            background: "#1e293b",
+                            color: "#cbd5e1",
+                            fontSize: "7px",
+                          }}
+                        >
+                          {signal}
+                        </span>
+                      ))}
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "8px",
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "5px",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleInspectCrossChainTransfer(
+                            candidate.source,
+                            "source",
+                          )
+                        }
+                        style={{
+                          padding: "6px",
+                          borderRadius: "5px",
+                          border: "1px solid #334155",
+                          background: "#111827",
+                          color: "#93c5fd",
+                          fontSize: "8px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Inspect Source TX
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleInspectCrossChainTransfer(
+                            candidate.destination,
+                            "destination",
+                          )
+                        }
+                        style={{
+                          padding: "6px",
+                          borderRadius: "5px",
+                          border: "1px solid #334155",
+                          background: "#111827",
+                          color: "#93c5fd",
+                          fontSize: "8px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Inspect Destination TX
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {crossChain && (
+                  <div
+                    style={{
+                      marginTop: "9px",
+                      padding: "7px 8px",
+                      border: "1px solid #334155",
+                      borderRadius: "6px",
+                      background: "#111827",
+                      color: "#94a3b8",
+                      fontSize: "8px",
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {crossChain.notice}
+                  </div>
+                )}
+              </div>
+
               {/* RISK BUTTON */}
 
               <button
@@ -4347,6 +5874,18 @@ function App() {
               <button
                 type="button"
                 onClick={() => {
+                  setInvestigationTab("candidate-linking");
+                }}
+                style={investigationTabStyle(
+                  investigationTab === "candidate-linking",
+                )}
+              >
+                Candidate Linking
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   setInvestigationTab("notes");
                   if (selectedCase && notes.length === 0 && !notesLoading) {
                     void loadNotes(selectedCase.id);
@@ -4481,6 +6020,379 @@ function App() {
                   </button>
                 </form>
               </div>
+            </>
+          )}
+
+          {/* CANDIDATE LINKING */}
+
+          {selectedWallet && investigationTab === "candidate-linking" && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>Candidate Linking</div>
+                <div
+                  style={{
+                    marginTop: "7px",
+                    fontSize: "10px",
+                    color: "#94a3b8",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Links the investigated wallet to known VASP intelligence
+                  using existing transaction-path evidence. This is a
+                  research-stage candidate assessment.
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "10px",
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "6px",
+                  }}
+                >
+                  <label style={labelStyle}>
+                    Max Hops
+                    <select
+                      value={candidateLinkingMaxHops}
+                      onChange={(event) =>
+                        setCandidateLinkingMaxHops(event.target.value)
+                      }
+                      style={{ ...inputStyle, marginTop: "5px" }}
+                      disabled={candidateLinkingLoading}
+                    >
+                      <option value="0">0</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                    </select>
+                  </label>
+
+                  <div
+                    style={{
+                      padding: "8px",
+                      border: "1px solid #334155",
+                      borderRadius: "6px",
+                      background: "#111827",
+                      color: "#94a3b8",
+                      fontSize: "8px",
+                      lineHeight: 1.5,
+                      alignSelf: "end",
+                    }}
+                  >
+                    Source: existing VASP intelligence + Neo4j
+                    transaction-path evidence
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void handleCandidateLinking()}
+                  disabled={candidateLinkingLoading}
+                  style={{
+                    ...primaryButtonStyle,
+                    marginTop: "10px",
+                  }}
+                >
+                  {candidateLinkingLoading
+                    ? "Linking Candidates..."
+                    : "Analyze Candidate Links"}
+                </button>
+              </div>
+
+              {candidateLinkingLoading && (
+                <div style={analyticsLoadingStyle}>
+                  Evaluating known VASP intelligence and transaction-path
+                  evidence...
+                </div>
+              )}
+
+              {candidateLinking && (
+                <>
+                  <div style={panelSectionStyle}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <div style={sectionTitleStyle}>Linking Summary</div>
+                      <span style={filterCountBadgeStyle}>
+                        {candidateLinking.candidate_count} candidate
+                        {candidateLinking.candidate_count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "8px",
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "6px",
+                      }}
+                    >
+                      <div style={analyticsStatStyle}>
+                        <span>Status</span>
+                        <strong>{candidateLinking.status}</strong>
+                      </div>
+                      <div style={analyticsStatStyle}>
+                        <span>Max hops</span>
+                        <strong>{candidateLinking.max_hops}</strong>
+                      </div>
+                      <div style={analyticsStatStyle}>
+                        <span>Chain</span>
+                        <strong>{candidateLinking.chain}</strong>
+                      </div>
+                      <div style={analyticsStatStyle}>
+                        <span>Candidates</span>
+                        <strong>{candidateLinking.candidate_count}</strong>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        color: "#64748b",
+                        fontSize: "9px",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {candidateLinking.method}
+                    </div>
+                  </div>
+
+                  {candidateLinking.candidates.length === 0 ? (
+                    <div style={analyticsEmptyStyle}>
+                      No candidate links were found within the configured
+                      transaction path depth.
+                    </div>
+                  ) : (
+                    candidateLinking.candidates.map((candidate, index) => (
+                      <div
+                        key={`${candidate.address}-${candidate.name ?? "candidate"}-${index}`}
+                        style={panelSectionStyle}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: "8px",
+                            alignItems: "flex-start",
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={sectionTitleStyle}>
+                              {candidate.name ?? "Known VASP"}
+                            </div>
+                            <div
+                              style={{
+                                marginTop: "5px",
+                                color: "#94a3b8",
+                                fontSize: "9px",
+                                wordBreak: "break-all",
+                              }}
+                            >
+                              {candidate.address}
+                            </div>
+                          </div>
+
+                          <span
+                            style={{
+                              ...analyticsSeverityStyle,
+                              color: "#86efac",
+                              flexShrink: 0,
+                            }}
+                          >
+                            {candidate.confidence !== null
+                              ? `${(candidate.confidence * 100).toFixed(1)}%`
+                              : "N/A"}
+                          </span>
+                        </div>
+
+                        <div
+                          style={{
+                            marginTop: "9px",
+                            display: "grid",
+                            gridTemplateColumns: "1fr 1fr",
+                            gap: "6px",
+                          }}
+                        >
+                          <div style={analyticsStatStyle}>
+                            <span>Hop</span>
+                            <strong>{candidate.hop ?? "N/A"}</strong>
+                          </div>
+                          <div style={analyticsStatStyle}>
+                            <span>Link Basis</span>
+                            <strong>{candidate.link_basis}</strong>
+                          </div>
+                          <div style={analyticsStatStyle}>
+                            <span>Link Strength</span>
+                            <strong>{candidate.link_strength}</strong>
+                          </div>
+                          <div style={analyticsStatStyle}>
+                            <span>Source</span>
+                            <strong>{candidate.source ?? "N/A"}</strong>
+                          </div>
+                        </div>
+
+                        {candidate.risk_category && (
+                          <div
+                            style={{
+                              marginTop: "7px",
+                              color: "#94a3b8",
+                              fontSize: "9px",
+                            }}
+                          >
+                            Risk category:{" "}
+                            <strong style={{ color: "#cbd5e1" }}>
+                              {candidate.risk_category}
+                            </strong>
+                          </div>
+                        )}
+
+                        {candidate.reason && (
+                          <div
+                            style={{
+                              marginTop: "9px",
+                              color: "#cbd5e1",
+                              fontSize: "10px",
+                              lineHeight: 1.5,
+                            }}
+                          >
+                            <strong>Reason:</strong> {candidate.reason}
+                          </div>
+                        )}
+
+                        {candidate.signals.length > 0 && (
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: "4px",
+                            }}
+                          >
+                            {candidate.signals.map((signal) => (
+                              <span
+                                key={signal}
+                                style={{
+                                  padding: "3px 5px",
+                                  borderRadius: "999px",
+                                  background: "#1e293b",
+                                  color: "#cbd5e1",
+                                  fontSize: "7px",
+                                }}
+                              >
+                                {signal}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {candidate.evidence && (
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              color: "#94a3b8",
+                              fontSize: "10px",
+                              lineHeight: 1.5,
+                            }}
+                          >
+                            <strong style={{ color: "#cbd5e1" }}>
+                              Evidence:
+                            </strong>{" "}
+                            {candidate.evidence}
+                          </div>
+                        )}
+
+                        <details
+                          style={{
+                            marginTop: "9px",
+                            color: "#94a3b8",
+                          }}
+                        >
+                          <summary
+                            style={{
+                              cursor: "pointer",
+                              color: "#60a5fa",
+                              fontSize: "10px",
+                            }}
+                          >
+                            Linked Transaction Evidence
+                          </summary>
+
+                          <div
+                            style={{
+                              marginTop: "8px",
+                              fontSize: "9px",
+                              color: "#cbd5e1",
+                              lineHeight: 1.5,
+                            }}
+                          >
+                            {candidate.wallets.length > 0 && (
+                              <>
+                                <div>
+                                  <strong>Wallet path:</strong>
+                                </div>
+                                <div
+                                  style={{
+                                    marginTop: "4px",
+                                    wordBreak: "break-all",
+                                  }}
+                                >
+                                  {candidate.wallets.join(" → ")}
+                                </div>
+                              </>
+                            )}
+
+                            {candidate.transfers.map(
+                              (transfer, transferIndex) => (
+                                <div
+                                  key={`${transfer.transaction_hash}-${transferIndex}`}
+                                  style={{
+                                    marginTop: "8px",
+                                    padding: "8px",
+                                    background: "#0f1117",
+                                    border: "1px solid #2f3545",
+                                    borderRadius: "6px",
+                                  }}
+                                >
+                                  <div>
+                                    <strong>Transaction:</strong>{" "}
+                                    <span style={{ wordBreak: "break-all" }}>
+                                      {transfer.transaction_hash}
+                                    </span>
+                                  </div>
+                                  <div style={{ marginTop: "4px" }}>
+                                    <strong>Asset:</strong>{" "}
+                                    {transfer.asset ?? "N/A"} ·{" "}
+                                    <strong>Value:</strong>{" "}
+                                    {transfer.value ?? "N/A"}
+                                  </div>
+                                  <div style={{ marginTop: "4px" }}>
+                                    <strong>Category:</strong>{" "}
+                                    {transfer.category ?? "N/A"} ·{" "}
+                                    <strong>Block:</strong>{" "}
+                                    {transfer.block_number ?? "N/A"}
+                                  </div>
+                                  <div style={{ marginTop: "4px" }}>
+                                    <strong>Timestamp:</strong>{" "}
+                                    {transfer.timestamp ?? "N/A"}
+                                  </div>
+                                </div>
+                              ),
+                            )}
+                          </div>
+                        </details>
+                      </div>
+                    ))
+                  )}
+
+                  <div style={amlDisclaimerStyle}>
+                    {candidateLinking.notice}
+                  </div>
+                </>
+              )}
             </>
           )}
 
@@ -5414,11 +7326,28 @@ function App() {
                 }
               >
                 <div
-                  style={
-                    sectionTitleStyle
-                  }
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                  }}
                 >
-                  Transaction
+                  <div style={sectionTitleStyle}>Transaction</div>
+                  {selectedTransfer.source_type === "peel_chain" && (
+                    <span
+                      style={{
+                        fontSize: "8px",
+                        padding: "3px 6px",
+                        borderRadius: "999px",
+                        background: "#172554",
+                        color: "#93c5fd",
+                        border: "1px solid #1d4ed8",
+                      }}
+                    >
+                      Peel Chain
+                    </span>
+                  )}
                 </div>
 
                 <div
@@ -5599,7 +7528,9 @@ function App() {
 
                   <strong>
                     {
-                      selectedTransfer.hop_count
+                      selectedTransfer.hop_number
+                        ? `Hop ${selectedTransfer.hop_number} of ${selectedTransfer.hop_count}`
+                        : selectedTransfer.hop_count
                     }
                   </strong>
                 </div>
@@ -5888,8 +7819,8 @@ function App() {
         )}
 
         <ReactFlow
-          nodes={filteredNodes}
-          edges={filteredEdges}
+          nodes={graphNodes}
+          edges={graphEdges}
           fitView
           onInit={setReactFlowInstance}
           minZoom={0.2}
@@ -6935,14 +8866,88 @@ function shortenAddress(
 }
 
 function formatNumber(
-  value: number,
+  value: number | null | undefined,
 ): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "—";
+  }
+
   return value.toLocaleString(
     undefined,
     {
       maximumFractionDigits: 6,
     },
   );
+}
+
+function getPeelPatternAssessment(candidate: PeelCandidate): {
+  label: string;
+  color: string;
+  signalCount: number;
+} {
+  const hopProgression = candidate.hop_value_progression ?? [];
+  const nonIncreasing =
+    hopProgression.length > 0 &&
+    hopProgression.every(
+      (hop) =>
+        Number.isFinite(hop.input_value) &&
+        Number.isFinite(hop.forwarded_value) &&
+        hop.forwarded_value <= hop.input_value,
+    );
+
+  const signals = [
+    candidate.same_asset,
+    candidate.timing.chronological,
+    candidate.value_progression.available,
+    candidate.value_progression.value_reduction,
+    nonIncreasing,
+  ];
+
+  const signalCount = signals.filter(Boolean).length;
+
+  if (signalCount >= 5) {
+    return {
+      label: "Strong pattern",
+      color: "#4ade80",
+      signalCount,
+    };
+  }
+
+  if (signalCount >= 4) {
+    return {
+      label: "Moderate pattern",
+      color: "#facc15",
+      signalCount,
+    };
+  }
+
+  return {
+    label: "Limited pattern",
+    color: "#f87171",
+    signalCount,
+  };
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) {
+    return "Unknown";
+  }
+
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  }
+
+  const minutes = seconds / 60;
+  if (minutes < 60) {
+    return `${minutes.toFixed(1)}m`;
+  }
+
+  const hours = minutes / 60;
+  if (hours < 24) {
+    return `${hours.toFixed(1)}h`;
+  }
+
+  return `${(hours / 24).toFixed(1)}d`;
 }
 
 function riskLevelColor(
