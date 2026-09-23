@@ -24,6 +24,28 @@ def _parse_timestamp(timestamp: str | None):
         return None
 
 
+def _normalize_transaction(transaction: dict) -> dict:
+    """
+    Normalize a Neo4j transaction record so it matches the
+    TimelineTransactionResponse schema.
+
+    Neo4j/live blockchain data can contain a missing or null
+    transaction value. The timeline analytics already treats
+    missing values as zero, so normalize the returned record
+    consistently before FastAPI/Pydantic validates the response.
+    """
+    normalized = dict(transaction)
+
+    raw_value = normalized.get("value")
+
+    try:
+        normalized["value"] = float(raw_value or 0)
+    except (TypeError, ValueError):
+        normalized["value"] = 0.0
+
+    return normalized
+
+
 def _sort_transactions(transactions: list[dict]):
     return sorted(
         transactions,
@@ -214,8 +236,15 @@ def analyze_wallet_timeline(
     if result is None:
         return None
 
-    outgoing_transactions = result["outgoing_transactions"]
-    incoming_transactions = result["incoming_transactions"]
+    outgoing_transactions = [
+        _normalize_transaction(transaction)
+        for transaction in result["outgoing_transactions"]
+    ]
+
+    incoming_transactions = [
+        _normalize_transaction(transaction)
+        for transaction in result["incoming_transactions"]
+    ]
 
     transactions = (
         outgoing_transactions

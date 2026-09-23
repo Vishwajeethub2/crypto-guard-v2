@@ -358,8 +358,9 @@ def ingest_live_transfers_bidirectional(
     from Alchemy and persist only valid, non-duplicate transactions
     into Neo4j.
 
-    This is the advanced live-tracing ingestion path.
-    The existing ingest_live_transfers() function remains unchanged.
+    Returns the normalized valid transactions as `transactions`
+    so recursive discovery can reuse the same Alchemy response
+    without making another API request for the same wallet.
     """
 
     chain = chain.lower()
@@ -439,6 +440,31 @@ def ingest_live_transfers_bidirectional(
     else:
         ingested_count = 0
 
+    # Keep live-refresh accounting internally consistent.
+    #
+    # valid_transactions = transactions that passed validation.
+    # Some of those may already exist in Neo4j, while the remainder
+    # are candidates for ingestion. The batch writer returns the
+    # number it actually processed.
+    #
+    # Treat every valid transaction not reported as newly ingested
+    # as a duplicate/already-present transaction for reporting.
+    # This guarantees:
+    #
+    # total_found == ingested_count + duplicate_count + invalid_count
+    #
+    # whenever normalized_count == total_found.
+
+    effective_ingested_count = min(
+        ingested_count,
+        len(new_transactions),
+    )
+
+    effective_duplicate_count = (
+        len(valid_transactions)
+        - effective_ingested_count
+    )
+
     return {
         "chain": chain,
         "source": "alchemy",
@@ -449,7 +475,223 @@ def ingest_live_transfers_bidirectional(
         "valid_count": len(valid_transactions),
         "invalid_count": len(invalid_transactions),
         "new_count": len(new_transactions),
-        "duplicate_count": len(existing_keys),
-        "ingested_count": ingested_count,
+        "duplicate_count": effective_duplicate_count,
+        "ingested_count": effective_ingested_count,
         "invalid_transactions": invalid_transactions,
+        "transactions": valid_transactions,
+    }
+
+
+def ingest_live_transfers_recursive(
+    chain: str,
+    address: str,
+    max_hops: int = 2,
+    max_wallets: int = 25,
+    max_transfers_per_wallet: int = 10,
+):
+    """
+    Controlled recursive live blockchain discovery.
+
+    Starts from the target wallet and recursively discovers
+    counterparties through live Alchemy transfers.
+
+    Safety controls:
+        max_hops:
+            Maximum graph depth. Hard maximum is 5.
+
+        max_wallets:
+            Maximum number of unique wallets processed.
+
+        max_transfers_per_wallet:
+            Maximum live transfers requested per wallet.
+
+    Each wallet is processed at most once.
+
+    The same Alchemy response is used for both:
+        1. Neo4j ingestion
+        2. Counterparty discovery
+
+    This prevents duplicate API calls for the same wallet.
+    """
+
+    chain = chain.lower()
+    address = address.lower()
+
+    if not validate_wallet_address(address):
+        raise ValueError("Invalid wallet address")
+
+    if max_hops < 1:
+        raise ValueError(
+            "max_hops must be at least 1"
+        )
+
+    if max_hops > 5:
+        raise ValueError(
+            "max_hops cannot exceed 5"
+        )
+
+    if max_wallets < 1:
+        raise ValueError(
+            "max_wallets must be at least 1"
+        )
+
+    if max_wallets > 100:
+        raise ValueError(
+            "max_wallets cannot exceed 100"
+        )
+
+    if max_transfers_per_wallet < 1:
+        raise ValueError(
+            "max_transfers_per_wallet must be at least 1"
+        )
+
+    if max_transfers_per_wallet > 100:
+        raise ValueError(
+            "max_transfers_per_wallet cannot exceed 100"
+        )
+
+    queue = [
+        {
+            "address": address,
+            "hop": 0,
+        }
+    ]
+
+    visited = set()
+
+    discovered_wallets = []
+
+    total_found = 0
+    total_ingested = 0
+    total_duplicates = 0
+    total_invalid = 0
+    api_calls = 0
+
+    while queue and len(visited) < max_wallets:
+        current = queue.pop(0)
+
+        current_address = current["address"].lower()
+        current_hop = current["hop"]
+
+        if current_address in visited:
+            continue
+
+        visited.add(current_address)
+
+        discovered_wallets.append(
+            {
+                "address": current_address,
+                "hop": current_hop,
+            }
+        )
+
+        # Do not fetch beyond the requested hop depth.
+        if current_hop >= max_hops:
+            continue
+
+        result = ingest_live_transfers_bidirectional(
+            chain=chain,
+            address=current_address,
+            max_count=max_transfers_per_wallet,
+        )
+
+        api_calls += 1
+
+        total_found += result.get(
+            "total_found",
+            0,
+        )
+
+        total_ingested += result.get(
+            "ingested_count",
+            0,
+        )
+
+        total_duplicates += result.get(
+            "duplicate_count",
+            0,
+        )
+
+        total_invalid += result.get(
+            "invalid_count",
+            0,
+        )
+
+        # Reuse the same normalized transactions returned
+        # by the Alchemy request. No second API call.
+        transactions = result.get(
+            "transactions",
+            [],
+        )
+
+        for transaction in transactions:
+            from_address = transaction.get(
+                "from_address"
+            )
+
+            to_address = transaction.get(
+                "to_address"
+            )
+
+            counterparties = []
+
+            if from_address:
+                counterparties.append(
+                    from_address.lower()
+                )
+
+            if to_address:
+                counterparties.append(
+                    to_address.lower()
+                )
+
+            for counterparty in counterparties:
+                if counterparty == current_address:
+                    continue
+
+                if counterparty in visited:
+                    continue
+
+                if any(
+                    queued["address"] == counterparty
+                    for queued in queue
+                ):
+                    continue
+
+                if (
+                    len(visited) + len(queue)
+                    >= max_wallets
+                ):
+                    continue
+
+                queue.append(
+                    {
+                        "address": counterparty,
+                        "hop": current_hop + 1,
+                    }
+                )
+
+    return {
+        "chain": chain,
+        "source": "alchemy",
+        "address": address,
+        "max_hops": max_hops,
+        "max_wallets": max_wallets,
+        "max_transfers_per_wallet": max_transfers_per_wallet,
+        "wallets_discovered": len(
+            discovered_wallets
+        ),
+        "wallets_processed": len(
+            visited
+        ),
+        "transfers_found": total_found,
+        "transfers_ingested": total_ingested,
+        "duplicate_transfers": total_duplicates,
+        "invalid_transfers": total_invalid,
+        "api_calls": api_calls,
+        "max_hops_reached": any(
+            wallet["hop"] >= max_hops
+            for wallet in discovered_wallets
+        ),
+        "wallets": discovered_wallets,
     }

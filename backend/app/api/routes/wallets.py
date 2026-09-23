@@ -8,7 +8,10 @@ from app.db.wallet_model import Wallet
 from app.schemas.risk import WalletRiskAnalysisResponse
 from app.schemas.wallet import WalletCreate
 from app.services.auth import get_current_user
-from app.services.ingestion import ingest_live_transfers_bidirectional
+from app.services.ingestion import (
+    ingest_live_transfers_bidirectional,
+    ingest_live_transfers_recursive,
+)
 from app.services.blockchain import validate_wallet_address
 from app.services.scoring import calculate_wallet_risk
 
@@ -147,6 +150,8 @@ def trace_wallet_api(
     direction: str = "both",
     max_hops: int = 2,
     refresh_live: bool = True,
+    max_live_wallets: int = 25,
+    max_live_transfers_per_wallet: int = 10,
     current_user=Depends(get_current_user),
 ):
     if not validate_wallet_address(address):
@@ -159,10 +164,12 @@ def trace_wallet_api(
         live_refresh_result = None
 
         if refresh_live:
-            live_refresh_result = ingest_live_transfers_bidirectional(
+            live_refresh_result = ingest_live_transfers_recursive(
                 chain=chain,
                 address=address,
-                max_count=10,
+                max_hops=max_hops,
+                max_wallets=max_live_wallets,
+                max_transfers_per_wallet=max_live_transfers_per_wallet,
             )
 
         traces = trace_wallet(
@@ -178,6 +185,8 @@ def trace_wallet_api(
             "direction": direction.lower(),
             "max_hops": max_hops,
             "refresh_live": refresh_live,
+            "max_live_wallets": max_live_wallets,
+            "max_live_transfers_per_wallet": max_live_transfers_per_wallet,
             "live_refresh": live_refresh_result,
             "trace_count": len(traces),
             "traces": traces,

@@ -265,6 +265,7 @@ def trace_wallet(
 ):
     direction = direction.lower()
     chain = chain.lower()
+    address = address.lower()
 
     if direction not in {"incoming", "outgoing", "both"}:
         raise ValueError(
@@ -388,18 +389,98 @@ def trace_wallet(
             chain=chain,
         )
 
-        traces = []
+        # Group traces by their wallet sequence.
+        #
+        # Example:
+        #
+        # A -> B -> C
+        # A -> B -> C
+        # A -> B -> C
+        #
+        # becomes one displayed path while all transaction
+        # variants remain available in "path_variants".
+        # Keep the total number of unique transaction sequences for
+        # each wallet path, but return only a bounded number of examples.
+        # This prevents large relationship combinations from creating
+        # unnecessarily large API responses.
+        MAX_PATH_VARIANTS = 10
+        grouped_paths = {}
 
         for record in result:
-            if len(traces) >= 500:
-                break
-            traces.append(
-                {
-                    "wallets": record["wallets"],
-                    "transfers": record["transfers"],
-                    "hop_count": len(record["wallets"]) - 1,
-                    "direction": direction,
+            wallets = list(record["wallets"] or [])
+            transfers = list(record["transfers"] or [])
+
+            if len(wallets) < 2:
+                continue
+
+            # Wallet sequence is the presentation-level path identity.
+            path_key = tuple(
+                wallet.lower() if isinstance(wallet, str) else wallet
+                for wallet in wallets
+            )
+
+            # Build a stable identity for this transaction sequence.
+            transfer_key = tuple(
+                transfer.get("transaction_hash")
+                for transfer in transfers
+            )
+
+            if path_key not in grouped_paths:
+                grouped_paths[path_key] = {
+                    "wallets": wallets,
+                    "transfers": transfers,
+                    "path_count": 1,
+                    "path_variants": [
+                        {
+                            "transfers": transfers,
+                        }
+                    ],
+                    # Keep every unique transaction sequence key separately
+                    # from the bounded response variants.
+                    "_variant_keys": {transfer_key},
                 }
+            else:
+                # Deduplicate against ALL previously seen transaction
+                # sequences, not just the first MAX_PATH_VARIANTS returned.
+                variant_keys = grouped_paths[path_key]["_variant_keys"]
+
+                if transfer_key not in variant_keys:
+                    variant_keys.add(transfer_key)
+
+                    # path_count is the total number of unique transaction
+                    # sequences for this wallet path.
+                    grouped_paths[path_key]["path_count"] += 1
+
+                    # Keep only a bounded sample in the API response.
+                    if (
+                        len(grouped_paths[path_key]["path_variants"])
+                        < MAX_PATH_VARIANTS
+                    ):
+                        grouped_paths[path_key]["path_variants"].append(
+                            {
+                                "transfers": transfers,
+                            }
+                        )
+
+        # Remove internal deduplication state before returning the response.
+        for path in grouped_paths.values():
+            path.pop("_variant_keys", None)
+
+        traces = list(grouped_paths.values())
+
+        # Keep the response bounded even when the graph contains
+        # a very large number of unique wallet paths.
+        traces = traces[:500]
+
+        for trace in traces:
+            trace["hop_count"] = len(trace["wallets"]) - 1
+            trace["direction"] = direction
+
+            # Useful frontend-friendly indicator.
+            # path_count == 1 means there was only one transaction
+            # sequence for this wallet path.
+            trace["has_multiple_transaction_paths"] = (
+                trace["path_count"] > 1
             )
 
         return traces
