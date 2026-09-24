@@ -412,6 +412,18 @@ type VaspAttributionResponse = {
   notice: string;
 };
 
+type RiskEntity = {
+  address: string;
+  chain: string;
+  entity_type: string;
+  name: string | null;
+  source: string | null;
+  risk_category: string | null;
+  confidence: number | null;
+  evidence: string | null;
+  updated_at: string | null;
+};
+
 type CaseNote = {
   id: number;
   case_id: number;
@@ -615,6 +627,76 @@ function App() {
     useState(false);
 
   /* =========================
+     INTELLIGENCE STATE
+  ========================= */
+
+  const [riskEntities, setRiskEntities] =
+    useState<RiskEntity[]>([]);
+
+  const [intelligenceLoading, setIntelligenceLoading] =
+    useState(false);
+
+  const [intelligenceChainFilter, setIntelligenceChainFilter] =
+    useState("all");
+
+  const [intelligenceTypeFilter, setIntelligenceTypeFilter] =
+    useState("all");
+
+  const [intelligenceSourceFilter, setIntelligenceSourceFilter] =
+    useState("all");
+
+  const [intelligenceRiskFilter, setIntelligenceRiskFilter] =
+    useState("all");
+
+  const [newRiskEntityAddress, setNewRiskEntityAddress] =
+    useState("");
+
+  const [newRiskEntityChain, setNewRiskEntityChain] =
+    useState("ethereum");
+
+  const [newRiskEntityType, setNewRiskEntityType] =
+    useState("vasp");
+
+  const [newRiskEntityName, setNewRiskEntityName] =
+    useState("");
+
+  const [newRiskEntitySource, setNewRiskEntitySource] =
+    useState("");
+
+  const [newRiskEntityRiskCategory, setNewRiskEntityRiskCategory] =
+    useState("");
+
+  const [newRiskEntityConfidence, setNewRiskEntityConfidence] =
+    useState("0.95");
+
+  const [newRiskEntityEvidence, setNewRiskEntityEvidence] =
+    useState("");
+
+  const [riskEntitySaving, setRiskEntitySaving] =
+    useState(false);
+
+  const [editingRiskEntityKey, setEditingRiskEntityKey] =
+    useState<string | null>(null);
+
+  const [editingRiskEntityName, setEditingRiskEntityName] =
+    useState("");
+
+  const [editingRiskEntityType, setEditingRiskEntityType] =
+    useState("");
+
+  const [editingRiskEntitySource, setEditingRiskEntitySource] =
+    useState("");
+
+  const [editingRiskEntityRiskCategory, setEditingRiskEntityRiskCategory] =
+    useState("");
+
+  const [editingRiskEntityConfidence, setEditingRiskEntityConfidence] =
+    useState("");
+
+  const [editingRiskEntityEvidence, setEditingRiskEntityEvidence] =
+    useState("");
+
+  /* =========================
      CANDIDATE LINKING STATE
   ========================= */
 
@@ -738,6 +820,7 @@ function App() {
       | "analytics"
       | "ml-aml"
       | "vasp"
+      | "intelligence"
       | "candidate-linking"
       | "notes"
       | "evidence"
@@ -1481,6 +1564,8 @@ function App() {
     setMlRisk(null);
     setAmlAssessment(null);
     setVaspAttribution(null);
+    setRiskEntities([]);
+    cancelEditingRiskEntity();
     setCandidateLinking(null);
     setNotes([]);
     setNewNoteContent("");
@@ -1792,6 +1877,8 @@ function App() {
       setMlRisk(null);
       setAmlAssessment(null);
       setVaspAttribution(null);
+      setRiskEntities([]);
+      cancelEditingRiskEntity();
       setCandidateLinking(null);
       setNodes([]);
       setEdges([]);
@@ -2015,6 +2102,8 @@ function App() {
     setMlRisk(null);
     setAmlAssessment(null);
     setVaspAttribution(null);
+    setRiskEntities([]);
+    cancelEditingRiskEntity();
     setCandidateLinking(null);
     setSelectedWallet(null);
     setSelectedTransfer(null);
@@ -2771,6 +2860,342 @@ function App() {
       setError(err instanceof Error ? err.message : "Failed to load VASP attribution");
     } finally {
       setVaspLoading(false);
+    }
+  }
+
+  /* =========================
+     INTELLIGENCE REGISTRY
+  ========================= */
+
+  async function handleLoadRiskEntities() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    setIntelligenceLoading(true);
+    setError(null);
+
+    try {
+      const params = new URLSearchParams();
+
+      if (intelligenceChainFilter !== "all") {
+        params.set("chain", intelligenceChainFilter);
+      }
+      if (intelligenceTypeFilter !== "all") {
+        params.set("entity_type", intelligenceTypeFilter);
+      }
+      if (intelligenceSourceFilter !== "all") {
+        params.set("source", intelligenceSourceFilter);
+      }
+      if (intelligenceRiskFilter !== "all") {
+        params.set("risk_category", intelligenceRiskFilter);
+      }
+
+      const query = params.toString();
+      const response = await fetch(
+        `${API_URL}/intelligence/risk-entities${query ? `?${query}` : ""}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message || `Intelligence registry returned ${response.status}`,
+        );
+      }
+
+      const data: RiskEntity[] = await response.json();
+      setRiskEntities(data);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load intelligence registry",
+      );
+    } finally {
+      setIntelligenceLoading(false);
+    }
+  }
+
+  function resetRiskEntityForm() {
+    setNewRiskEntityAddress(selectedWallet ?? "");
+    setNewRiskEntityChain(chain);
+    setNewRiskEntityType("vasp");
+    setNewRiskEntityName("");
+    setNewRiskEntitySource("");
+    setNewRiskEntityRiskCategory("centralized_exchange");
+    setNewRiskEntityConfidence("0.95");
+    setNewRiskEntityEvidence("");
+  }
+
+  async function handleCreateRiskEntity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    const addressValue = newRiskEntityAddress.trim();
+    const chainValue = newRiskEntityChain.trim();
+    const typeValue = newRiskEntityType.trim();
+    const nameValue = newRiskEntityName.trim();
+    const sourceValue = newRiskEntitySource.trim();
+    const riskCategoryValue = newRiskEntityRiskCategory.trim();
+    const evidenceValue = newRiskEntityEvidence.trim();
+    const confidenceValue = Number(newRiskEntityConfidence);
+
+    if (!addressValue) {
+      setError("Risk entity address is required.");
+      return;
+    }
+    if (!chainValue) {
+      setError("Risk entity chain is required.");
+      return;
+    }
+    if (!typeValue) {
+      setError("Entity type is required.");
+      return;
+    }
+    if (!nameValue) {
+      setError("Risk entity name is required.");
+      return;
+    }
+    if (!sourceValue) {
+      setError("Intelligence source is required.");
+      return;
+    }
+    if (
+      !Number.isFinite(confidenceValue) ||
+      confidenceValue < 0 ||
+      confidenceValue > 1
+    ) {
+      setError("Confidence must be between 0 and 1.");
+      return;
+    }
+
+    setRiskEntitySaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_URL}/intelligence/risk-entities`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          address: addressValue,
+          chain: chainValue,
+          entity_type: typeValue,
+          name: nameValue,
+          source: sourceValue,
+          risk_category: riskCategoryValue || undefined,
+          confidence: confidenceValue,
+          evidence: evidenceValue || undefined,
+        }),
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message || `Create risk entity returned ${response.status}`,
+        );
+      }
+
+      resetRiskEntityForm();
+      await handleLoadRiskEntities();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to create risk entity",
+      );
+    } finally {
+      setRiskEntitySaving(false);
+    }
+  }
+
+  function startEditingRiskEntity(entity: RiskEntity) {
+    setEditingRiskEntityKey(`${entity.chain}:${entity.address.toLowerCase()}`);
+    setEditingRiskEntityName(entity.name ?? "");
+    setEditingRiskEntityType(entity.entity_type);
+    setEditingRiskEntitySource(entity.source ?? "");
+    setEditingRiskEntityRiskCategory(entity.risk_category ?? "");
+    setEditingRiskEntityConfidence(
+      entity.confidence !== null ? String(entity.confidence) : "",
+    );
+    setEditingRiskEntityEvidence(entity.evidence ?? "");
+    setError(null);
+  }
+
+  function cancelEditingRiskEntity() {
+    setEditingRiskEntityKey(null);
+    setEditingRiskEntityName("");
+    setEditingRiskEntityType("");
+    setEditingRiskEntitySource("");
+    setEditingRiskEntityRiskCategory("");
+    setEditingRiskEntityConfidence("");
+    setEditingRiskEntityEvidence("");
+  }
+
+  async function handleUpdateRiskEntity(entity: RiskEntity) {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    const nameValue = editingRiskEntityName.trim();
+    const typeValue = editingRiskEntityType.trim();
+    const sourceValue = editingRiskEntitySource.trim();
+    const riskCategoryValue = editingRiskEntityRiskCategory.trim();
+    const evidenceValue = editingRiskEntityEvidence.trim();
+    const confidenceValue = Number(editingRiskEntityConfidence);
+
+    if (!nameValue) {
+      setError("Risk entity name is required.");
+      return;
+    }
+    if (!typeValue) {
+      setError("Entity type is required.");
+      return;
+    }
+    if (!sourceValue) {
+      setError("Intelligence source is required.");
+      return;
+    }
+    if (
+      !Number.isFinite(confidenceValue) ||
+      confidenceValue < 0 ||
+      confidenceValue > 1
+    ) {
+      setError("Confidence must be between 0 and 1.");
+      return;
+    }
+
+    setRiskEntitySaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/intelligence/risk-entities/${encodeURIComponent(entity.address)}?chain=${encodeURIComponent(entity.chain)}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            entity_type: typeValue,
+            name: nameValue,
+            source: sourceValue,
+            risk_category: riskCategoryValue || undefined,
+            confidence: confidenceValue,
+            evidence: evidenceValue || undefined,
+          }),
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message || `Update risk entity returned ${response.status}`,
+        );
+      }
+
+      cancelEditingRiskEntity();
+      await handleLoadRiskEntities();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to update risk entity",
+      );
+    } finally {
+      setRiskEntitySaving(false);
+    }
+  }
+
+  async function handleDeleteRiskEntity(entity: RiskEntity) {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete the intelligence record "${entity.name ?? entity.address}"? This action cannot be undone.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setRiskEntitySaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/intelligence/risk-entities/${encodeURIComponent(entity.address)}?chain=${encodeURIComponent(entity.chain)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+        throw new Error("Session expired. Please login again.");
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(
+          message || `Delete risk entity returned ${response.status}`,
+        );
+      }
+
+      if (
+        editingRiskEntityKey ===
+        `${entity.chain}:${entity.address.toLowerCase()}`
+      ) {
+        cancelEditingRiskEntity();
+      }
+
+      await handleLoadRiskEntities();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete risk entity",
+      );
+    } finally {
+      setRiskEntitySaving(false);
     }
   }
 
@@ -5874,6 +6299,22 @@ function App() {
               <button
                 type="button"
                 onClick={() => {
+                  setInvestigationTab("intelligence");
+                  if (!intelligenceLoading) {
+                    void handleLoadRiskEntities();
+                  }
+                  if (!newRiskEntityAddress && selectedWallet) {
+                    resetRiskEntityForm();
+                  }
+                }}
+                style={investigationTabStyle(investigationTab === "intelligence")}
+              >
+                Intelligence
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   setInvestigationTab("candidate-linking");
                 }}
                 style={investigationTabStyle(
@@ -6017,6 +6458,548 @@ function App() {
                   <textarea value={vaspLabelEvidence} onChange={(event) => setVaspLabelEvidence(event.target.value)} placeholder="Evidence / source description" rows={3} style={{ ...inputStyle, marginTop: "7px", resize: "vertical", lineHeight: 1.5 }} disabled={vaspLabelSaving} />
                   <button type="submit" disabled={vaspLabelSaving || !vaspLabelName.trim()} style={{ ...primaryButtonStyle, marginTop: "7px" }}>
                     {vaspLabelSaving ? "Saving..." : "Add Known VASP Label"}
+                  </button>
+                </form>
+              </div>
+            </>
+          )}
+
+          {/* INTELLIGENCE REGISTRY */}
+
+          {selectedWallet && investigationTab === "intelligence" && (
+            <>
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>Risk Entity Intelligence</div>
+                <div
+                  style={{
+                    marginTop: "7px",
+                    fontSize: "10px",
+                    color: "#94a3b8",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Manage documented intelligence entities used by VASP
+                  attribution, candidate linking, and risk exposure analysis.
+                  Records are stored in the backend intelligence registry and
+                  Neo4j.
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "10px",
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "6px",
+                  }}
+                >
+                  <select
+                    value={intelligenceChainFilter}
+                    onChange={(event) =>
+                      setIntelligenceChainFilter(event.target.value)
+                    }
+                    style={inputStyle}
+                    disabled={intelligenceLoading}
+                  >
+                    <option value="all">All chains</option>
+                    <option value="ethereum">Ethereum</option>
+                    <option value="polygon">Polygon</option>
+                    <option value="arbitrum">Arbitrum</option>
+                    <option value="optimism">Optimism</option>
+                    <option value="base">Base</option>
+                  </select>
+
+                  <select
+                    value={intelligenceTypeFilter}
+                    onChange={(event) =>
+                      setIntelligenceTypeFilter(event.target.value)
+                    }
+                    style={inputStyle}
+                    disabled={intelligenceLoading}
+                  >
+                    <option value="all">All entity types</option>
+                    <option value="vasp">VASP</option>
+                    <option value="exchange">Exchange</option>
+                    <option value="mixer">Mixer</option>
+                    <option value="sanctions">Sanctions</option>
+                    <option value="scam">Scam</option>
+                    <option value="risk_entity">Risk Entity</option>
+                  </select>
+
+                  <select
+                    value={intelligenceSourceFilter}
+                    onChange={(event) =>
+                      setIntelligenceSourceFilter(event.target.value)
+                    }
+                    style={inputStyle}
+                    disabled={intelligenceLoading}
+                  >
+                    <option value="all">All sources</option>
+                    {Array.from(
+                      new Set(
+                        riskEntities
+                          .map((entity) => entity.source)
+                          .filter(
+                            (value): value is string =>
+                              Boolean(value && value.trim()),
+                          ),
+                      ),
+                    )
+                      .sort()
+                      .map((source) => (
+                        <option key={source} value={source}>
+                          {source}
+                        </option>
+                      ))}
+                  </select>
+
+                  <select
+                    value={intelligenceRiskFilter}
+                    onChange={(event) =>
+                      setIntelligenceRiskFilter(event.target.value)
+                    }
+                    style={inputStyle}
+                    disabled={intelligenceLoading}
+                  >
+                    <option value="all">All risk categories</option>
+                    <option value="centralized_exchange">
+                      Centralized Exchange
+                    </option>
+                    <option value="decentralized_exchange">
+                      Decentralized Exchange
+                    </option>
+                    <option value="mixer">Mixer</option>
+                    <option value="sanctions">Sanctions</option>
+                    <option value="scam">Scam</option>
+                    <option value="stolen_funds">Stolen Funds</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void handleLoadRiskEntities()}
+                  disabled={intelligenceLoading}
+                  style={{ ...primaryButtonStyle, marginTop: "8px" }}
+                >
+                  {intelligenceLoading
+                    ? "Loading Intelligence..."
+                    : "Refresh Intelligence Registry"}
+                </button>
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "8px",
+                  }}
+                >
+                  <div style={sectionTitleStyle}>Registered Risk Entities</div>
+                  <span style={filterCountBadgeStyle}>
+                    {riskEntities.length} record
+                    {riskEntities.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+
+                {intelligenceLoading ? (
+                  <div style={analyticsLoadingStyle}>
+                    Loading documented intelligence records...
+                  </div>
+                ) : riskEntities.length === 0 ? (
+                  <div style={analyticsEmptyStyle}>
+                    No risk entities matched the current filters.
+                  </div>
+                ) : (
+                  <div style={{ marginTop: "9px" }}>
+                    {riskEntities.map((entity, index) => {
+                      const entityKey = `${entity.chain}:${entity.address.toLowerCase()}`;
+                      const isEditing = editingRiskEntityKey === entityKey;
+
+                      return (
+                        <div
+                          key={`${entityKey}-${index}`}
+                          style={{
+                            ...analyticsListItemStyle,
+                            marginBottom: "7px",
+                          }}
+                        >
+                          {isEditing ? (
+                            <>
+                              <div
+                                style={{
+                                  color: "#cbd5e1",
+                                  fontSize: "9px",
+                                  wordBreak: "break-all",
+                                }}
+                              >
+                                <strong>Address:</strong> {entity.address}
+                              </div>
+                              <div
+                                style={{
+                                  marginTop: "3px",
+                                  color: "#64748b",
+                                  fontSize: "9px",
+                                }}
+                              >
+                                Chain: {entity.chain}
+                              </div>
+
+                              <input
+                                value={editingRiskEntityName}
+                                onChange={(event) =>
+                                  setEditingRiskEntityName(event.target.value)
+                                }
+                                placeholder="Entity name"
+                                style={{ ...inputStyle, marginTop: "7px" }}
+                                disabled={riskEntitySaving}
+                              />
+                              <input
+                                value={editingRiskEntityType}
+                                onChange={(event) =>
+                                  setEditingRiskEntityType(event.target.value)
+                                }
+                                placeholder="Entity type"
+                                style={{ ...inputStyle, marginTop: "6px" }}
+                                disabled={riskEntitySaving}
+                              />
+                              <input
+                                value={editingRiskEntitySource}
+                                onChange={(event) =>
+                                  setEditingRiskEntitySource(event.target.value)
+                                }
+                                placeholder="Intelligence source"
+                                style={{ ...inputStyle, marginTop: "6px" }}
+                                disabled={riskEntitySaving}
+                              />
+                              <input
+                                value={editingRiskEntityRiskCategory}
+                                onChange={(event) =>
+                                  setEditingRiskEntityRiskCategory(
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder="Risk category"
+                                style={{ ...inputStyle, marginTop: "6px" }}
+                                disabled={riskEntitySaving}
+                              />
+                              <input
+                                value={editingRiskEntityConfidence}
+                                onChange={(event) =>
+                                  setEditingRiskEntityConfidence(
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder="Confidence 0-1"
+                                inputMode="decimal"
+                                style={{ ...inputStyle, marginTop: "6px" }}
+                                disabled={riskEntitySaving}
+                              />
+                              <textarea
+                                value={editingRiskEntityEvidence}
+                                onChange={(event) =>
+                                  setEditingRiskEntityEvidence(
+                                    event.target.value,
+                                  )
+                                }
+                                placeholder="Evidence"
+                                rows={3}
+                                style={{
+                                  ...inputStyle,
+                                  marginTop: "6px",
+                                  resize: "vertical",
+                                  lineHeight: 1.5,
+                                }}
+                                disabled={riskEntitySaving}
+                              />
+
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "6px",
+                                  marginTop: "7px",
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleUpdateRiskEntity(entity)
+                                  }
+                                  disabled={riskEntitySaving}
+                                  style={primaryButtonStyle}
+                                >
+                                  {riskEntitySaving ? "Saving..." : "Save"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelEditingRiskEntity}
+                                  disabled={riskEntitySaving}
+                                  style={secondaryButtonStyle}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  gap: "8px",
+                                  alignItems: "flex-start",
+                                }}
+                              >
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={sectionTitleStyle}>
+                                    {entity.name ?? "Unnamed Risk Entity"}
+                                  </div>
+                                  <div
+                                    style={{
+                                      marginTop: "4px",
+                                      color: "#94a3b8",
+                                      fontSize: "9px",
+                                      wordBreak: "break-all",
+                                    }}
+                                  >
+                                    {entity.address}
+                                  </div>
+                                </div>
+
+                                <span
+                                  style={{
+                                    ...analyticsSeverityStyle,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {entity.confidence !== null
+                                    ? `${(entity.confidence * 100).toFixed(1)}%`
+                                    : "N/A"}
+                                </span>
+                              </div>
+
+                              <div
+                                style={{
+                                  marginTop: "8px",
+                                  display: "grid",
+                                  gridTemplateColumns: "1fr 1fr",
+                                  gap: "6px",
+                                }}
+                              >
+                                <div style={analyticsStatStyle}>
+                                  <span>Chain</span>
+                                  <strong>{entity.chain}</strong>
+                                </div>
+                                <div style={analyticsStatStyle}>
+                                  <span>Type</span>
+                                  <strong>{entity.entity_type}</strong>
+                                </div>
+                                <div style={analyticsStatStyle}>
+                                  <span>Source</span>
+                                  <strong>{entity.source ?? "N/A"}</strong>
+                                </div>
+                                <div style={analyticsStatStyle}>
+                                  <span>Risk</span>
+                                  <strong>
+                                    {entity.risk_category ?? "N/A"}
+                                  </strong>
+                                </div>
+                              </div>
+
+                              {entity.evidence && (
+                                <div
+                                  style={{
+                                    marginTop: "8px",
+                                    color: "#94a3b8",
+                                    fontSize: "9px",
+                                    lineHeight: 1.5,
+                                  }}
+                                >
+                                  <strong style={{ color: "#cbd5e1" }}>
+                                    Evidence:
+                                  </strong>{" "}
+                                  {entity.evidence}
+                                </div>
+                              )}
+
+                              {entity.updated_at && (
+                                <div
+                                  style={{
+                                    marginTop: "5px",
+                                    color: "#64748b",
+                                    fontSize: "8px",
+                                  }}
+                                >
+                                  Updated: {entity.updated_at}
+                                </div>
+                              )}
+
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "6px",
+                                  marginTop: "8px",
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => startEditingRiskEntity(entity)}
+                                  disabled={riskEntitySaving}
+                                  style={secondaryButtonStyle}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void handleDeleteRiskEntity(entity)
+                                  }
+                                  disabled={riskEntitySaving}
+                                  style={{
+                                    ...secondaryButtonStyle,
+                                    borderColor: "#7f1d1d",
+                                    color: "#fca5a5",
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div style={panelSectionStyle}>
+                <div style={sectionTitleStyle}>Add Risk Entity</div>
+                <div
+                  style={{
+                    marginTop: "6px",
+                    color: "#64748b",
+                    fontSize: "9px",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  Add a documented intelligence entity to the registry. The
+                  address is also linked to the Neo4j intelligence graph by
+                  the backend.
+                </div>
+
+                <form
+                  onSubmit={handleCreateRiskEntity}
+                  style={{ marginTop: "10px" }}
+                >
+                  <input
+                    value={newRiskEntityAddress}
+                    onChange={(event) =>
+                      setNewRiskEntityAddress(event.target.value)
+                    }
+                    placeholder="Wallet / risk entity address"
+                    style={inputStyle}
+                    disabled={riskEntitySaving}
+                    required
+                  />
+
+                  <select
+                    value={newRiskEntityChain}
+                    onChange={(event) =>
+                      setNewRiskEntityChain(event.target.value)
+                    }
+                    style={{ ...inputStyle, marginTop: "6px" }}
+                    disabled={riskEntitySaving}
+                  >
+                    <option value="ethereum">Ethereum</option>
+                    <option value="polygon">Polygon</option>
+                    <option value="arbitrum">Arbitrum</option>
+                    <option value="optimism">Optimism</option>
+                    <option value="base">Base</option>
+                  </select>
+
+                  <input
+                    value={newRiskEntityType}
+                    onChange={(event) =>
+                      setNewRiskEntityType(event.target.value)
+                    }
+                    placeholder="Entity type, e.g. vasp"
+                    style={{ ...inputStyle, marginTop: "6px" }}
+                    disabled={riskEntitySaving}
+                    required
+                  />
+
+                  <input
+                    value={newRiskEntityName}
+                    onChange={(event) =>
+                      setNewRiskEntityName(event.target.value)
+                    }
+                    placeholder="Entity name, e.g. Coinbase"
+                    style={{ ...inputStyle, marginTop: "6px" }}
+                    disabled={riskEntitySaving}
+                    required
+                  />
+
+                  <input
+                    value={newRiskEntitySource}
+                    onChange={(event) =>
+                      setNewRiskEntitySource(event.target.value)
+                    }
+                    placeholder="Intelligence source"
+                    style={{ ...inputStyle, marginTop: "6px" }}
+                    disabled={riskEntitySaving}
+                    required
+                  />
+
+                  <input
+                    value={newRiskEntityRiskCategory}
+                    onChange={(event) =>
+                      setNewRiskEntityRiskCategory(event.target.value)
+                    }
+                    placeholder="Risk category"
+                    style={{ ...inputStyle, marginTop: "6px" }}
+                    disabled={riskEntitySaving}
+                  />
+
+                  <input
+                    value={newRiskEntityConfidence}
+                    onChange={(event) =>
+                      setNewRiskEntityConfidence(event.target.value)
+                    }
+                    placeholder="Confidence 0-1"
+                    inputMode="decimal"
+                    style={{ ...inputStyle, marginTop: "6px" }}
+                    disabled={riskEntitySaving}
+                    required
+                  />
+
+                  <textarea
+                    value={newRiskEntityEvidence}
+                    onChange={(event) =>
+                      setNewRiskEntityEvidence(event.target.value)
+                    }
+                    placeholder="Evidence / source description"
+                    rows={3}
+                    style={{
+                      ...inputStyle,
+                      marginTop: "6px",
+                      resize: "vertical",
+                      lineHeight: 1.5,
+                    }}
+                    disabled={riskEntitySaving}
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={
+                      riskEntitySaving ||
+                      !newRiskEntityAddress.trim() ||
+                      !newRiskEntityName.trim()
+                    }
+                    style={{ ...primaryButtonStyle, marginTop: "7px" }}
+                  >
+                    {riskEntitySaving ? "Saving..." : "Add Risk Entity"}
                   </button>
                 </form>
               </div>
@@ -9188,6 +10171,7 @@ const detailRowStyle: React.CSSProperties =
 
 
 export default App;
+
 
 
 
