@@ -448,7 +448,7 @@ type CaseEvidence = {
 const API_URL = import.meta.env.VITE_API_URL;
 
 function App() {
-  const [health, setHealth] =
+  const [, setHealth] =
     useState<HealthResponse | null>(null);
 
   const [token, setToken] = useState<string | null>(
@@ -4214,7 +4214,7 @@ function App() {
         selectable: isHighlighted,
         style: {
           ...(node.style ?? {}),
-          pointerEvents: isHighlighted ? "auto" : "none",
+          pointerEvents: (isHighlighted ? "auto" : "none") as React.CSSProperties["pointerEvents"],
           border: isHighlighted
             ? "2px solid #00F7FF"
             : "1px solid #143038",
@@ -4276,13 +4276,13 @@ function App() {
           filter: isHighlighted
             ? "drop-shadow(0 0 5px rgba(217,154,43,0.85))"
             : "none",
-          pointerEvents: isHighlighted ? "auto" : "none",
+          pointerEvents: (isHighlighted ? "auto" : "none") as React.CSSProperties["pointerEvents"],
         },
         labelStyle: {
           ...(edge.labelStyle ?? {}),
           opacity: isHighlighted ? 1 : 0.12,
           fontWeight: isHighlighted ? 800 : 600,
-          pointerEvents: isHighlighted ? "auto" : "none",
+          pointerEvents: (isHighlighted ? "auto" : "none") as React.CSSProperties["pointerEvents"],
         },
       };
     }
@@ -10633,28 +10633,6 @@ const investigationBackTitleStyle: React.CSSProperties = {
   fontWeight: 700,
   lineHeight: 1.2,
 };
-
-const investigationTabsStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: "4px",
-  padding: "3px",
-  marginBottom: "10px",
-  background: "#02090C",
-  border: "1px solid #12252A",
-  borderRadius: "7px",
-};
-
-const investigationTabStyle = (active: boolean): React.CSSProperties => ({
-  border: "none",
-  borderRadius: "5px",
-  padding: "7px 8px",
-  cursor: "pointer",
-  background: active ? "#00F7FF" : "transparent",
-  color: active ? "#02090C" : "#A9C5C8",
-  fontSize: "12px",
-  fontWeight: 700,
-});
 
 const filterCountBadgeStyle: React.CSSProperties = {
   padding: "2px 6px",
