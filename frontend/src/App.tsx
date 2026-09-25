@@ -455,11 +455,26 @@ function App() {
     localStorage.getItem("access_token"),
   );
 
+  const [authMode, setAuthMode] =
+    useState<"login" | "register" | "verify">("login");
+
+  const [verificationEmail, setVerificationEmail] =
+    useState("");
+
+  const [verificationCode, setVerificationCode] =
+    useState("");
+
+  const [fullName, setFullName] =
+    useState("");
+
   const [email, setEmail] =
-    useState("test@example.com");
+    useState("");
 
   const [password, setPassword] =
-    useState("TestPassword123!");
+    useState("");
+
+  const [confirmPassword, setConfirmPassword] =
+    useState("");
 
   /* =========================
      CASE STATE
@@ -549,6 +564,9 @@ function App() {
   const [selectedPeelCandidateKey, setSelectedPeelCandidateKey] =
     useState<string | null>(null);
 
+  const [peelExpanded, setPeelExpanded] =
+    useState(false);
+
   /* =========================
      CROSS-CHAIN STATE
   ========================= */
@@ -566,6 +584,9 @@ function App() {
     useState<CrossChainResponse | null>(null);
 
   const [crossChainLoading, setCrossChainLoading] =
+    useState(false);
+
+  const [crossChainExpanded, setCrossChainExpanded] =
     useState(false);
 
   /* =========================
@@ -810,6 +831,9 @@ function App() {
   const [selectedWallet, setSelectedWallet] =
     useState<string | null>(null);
 
+  const [highlightPathEnabled, setHighlightPathEnabled] =
+    useState(false);
+
   const [selectedTransfer, setSelectedTransfer] =
     useState<WalletTransaction | null>(null);
 
@@ -825,6 +849,9 @@ function App() {
       | "notes"
       | "evidence"
     >("wallet");
+
+  const [investigationMenuOpen, setInvestigationMenuOpen] =
+    useState(true);
 
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(false);
@@ -849,6 +876,9 @@ function App() {
     useState(false);
 
   const [error, setError] =
+    useState<string | null>(null);
+
+  const [authNotice, setAuthNotice] =
     useState<string | null>(null);
 
   /* =========================
@@ -1480,16 +1510,49 @@ function App() {
   }
 
   /* =========================
-     LOGIN
+     AUTHENTICATION
   ========================= */
+
+  async function readAuthError(
+    response: Response,
+    fallback: string,
+  ) {
+    const raw = await response.text();
+
+    if (!raw) {
+      return fallback;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as {
+        detail?: unknown;
+        message?: unknown;
+      };
+
+      if (typeof parsed.detail === "string") {
+        return parsed.detail;
+      }
+
+      if (typeof parsed.message === "string") {
+        return parsed.message;
+      }
+    } catch {
+      // Fall back to the raw response when it is not JSON.
+    }
+
+    return raw;
+  }
 
   async function handleLogin(
     event: FormEvent<HTMLFormElement>,
   ) {
     event.preventDefault();
 
+    const trimmedEmail = email.trim();
+
     setLoginLoading(true);
     setError(null);
+    setAuthNotice(null);
 
     try {
       const response = await fetch(
@@ -1501,20 +1564,33 @@ function App() {
               "application/json",
           },
           body: JSON.stringify({
-            email,
+            email: trimmedEmail,
             password,
           }),
         },
       );
 
       if (!response.ok) {
-        const message =
-          await response.text();
-
-        throw new Error(
-          message ||
-            `Login failed with status ${response.status}`,
+        const message = await readAuthError(
+          response,
+          `Login failed with status ${response.status}`,
         );
+
+        // An existing account may have been created but not verified yet.
+        // Move the user directly to the verification flow instead of
+        // leaving them at a dead-end login error.
+        if (
+          response.status === 403 &&
+          message.toLowerCase().includes("verify")
+        ) {
+          setVerificationEmail(trimmedEmail);
+          setVerificationCode("");
+          setAuthMode("verify");
+          setError(message);
+          return;
+        }
+
+        throw new Error(message);
       }
 
       const data: LoginResponse =
@@ -1526,11 +1602,251 @@ function App() {
       );
 
       setToken(data.access_token);
+      setPassword("");
+      setConfirmPassword("");
+      setAuthNotice(null);
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
           : "Login failed",
+      );
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleRegister(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    const trimmedFullName = fullName.trim();
+    const trimmedEmail = email.trim();
+
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    if (!password) {
+      setError("Password is required.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+
+    setLoginLoading(true);
+    setError(null);
+    setAuthNotice(null);
+
+    try {
+      const registerResponse = await fetch(
+        `${API_URL}/users/`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            email: trimmedEmail,
+            password,
+            full_name:
+              trimmedFullName || null,
+          }),
+        },
+      );
+
+      if (!registerResponse.ok) {
+        const message = await readAuthError(
+          registerResponse,
+          `Account creation failed with status ${registerResponse.status}`,
+        );
+
+        // The backend intentionally returns 409 for an existing email.
+        // For an unverified account, the resend endpoint can safely issue
+        // another code and lets the user continue the verification flow.
+        if (registerResponse.status === 409) {
+          setVerificationEmail(trimmedEmail);
+          setVerificationCode("");
+
+          try {
+            const resendResponse = await fetch(
+              `${API_URL}/users/resend-verification`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+                body: JSON.stringify({
+                  email: trimmedEmail,
+                }),
+              },
+            );
+
+            if (!resendResponse.ok) {
+              throw new Error(
+                await readAuthError(
+                  resendResponse,
+                  "This email is already registered.",
+                ),
+              );
+            }
+
+            setFullName("");
+            setPassword("");
+            setConfirmPassword("");
+            setAuthMode("verify");
+            setError(null);
+            setAuthNotice(
+              "This email is already registered. If it still needs verification, a new code has been sent.",
+            );
+            return;
+          } catch {
+            // Keep the original registration conflict if the resend
+            // request itself cannot be completed.
+          }
+        }
+
+        throw new Error(message);
+      }
+
+      setVerificationEmail(trimmedEmail);
+      setVerificationCode("");
+      setFullName("");
+      setPassword("");
+      setConfirmPassword("");
+      setAuthMode("verify");
+      setError(null);
+      setAuthNotice(
+        "Account created. Check your email for the 6-digit verification code.",
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Account creation failed",
+      );
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleVerifyEmail(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    const trimmedEmail = verificationEmail.trim();
+    const trimmedCode = verificationCode.trim();
+
+    if (!trimmedEmail) {
+      setError("Verification email is required.");
+      return;
+    }
+
+    if (!/^\d{6}$/.test(trimmedCode)) {
+      setError("Enter the 6-digit verification code.");
+      return;
+    }
+
+    setLoginLoading(true);
+    setError(null);
+    setAuthNotice(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/users/verify-email`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            email: trimmedEmail,
+            code: trimmedCode,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          await readAuthError(
+            response,
+            `Email verification failed with status ${response.status}`,
+          ),
+        );
+      }
+
+      setEmail(trimmedEmail);
+      setVerificationCode("");
+      setAuthMode("login");
+      setError(null);
+      setAuthNotice(
+        "Email verified successfully. You can now sign in.",
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Email verification failed",
+      );
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleResendVerification() {
+    const trimmedEmail = verificationEmail.trim();
+
+    if (!trimmedEmail) {
+      setError("Verification email is required.");
+      return;
+    }
+
+    setLoginLoading(true);
+    setError(null);
+    setAuthNotice(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/users/resend-verification`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            email: trimmedEmail,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          await readAuthError(
+            response,
+            `Could not resend verification code (status ${response.status})`,
+          ),
+        );
+      }
+
+      setVerificationCode("");
+      setAuthNotice(
+        "If this account requires verification, a new code has been sent to your email.",
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not resend verification code",
       );
     } finally {
       setLoginLoading(false);
@@ -1579,6 +1895,10 @@ function App() {
     setSelectedTransfer(null);
 
     setError(null);
+    setAuthNotice(null);
+    setAuthMode("login");
+    setVerificationEmail("");
+    setVerificationCode("");
   }
 
   /* =========================
@@ -2106,6 +2426,7 @@ function App() {
     cancelEditingRiskEntity();
     setCandidateLinking(null);
     setSelectedWallet(null);
+    setHighlightPathEnabled(false);
     setSelectedTransfer(null);
     setSelectedPeelCandidateKey(null);
 
@@ -2263,22 +2584,28 @@ function App() {
           const levelIndex =
             levelWallets.indexOf(wallet);
 
+          // Vertical hop layout: target at the top, then each hop below it.
+          // Wallets in the same hop spread horizontally so dense levels grow
+          // wider instead of compressing or overlapping.
+          const horizontalSpacing = 300;
           const verticalSpacing = 300;
 
-          const levelHeight =
+          const levelWidth =
             (levelWallets.length - 1) *
-            verticalSpacing;
+            horizontalSpacing;
 
-          const y =
+          const x =
             levelIndex *
-            verticalSpacing -
-            levelHeight / 2;
+            horizontalSpacing -
+            levelWidth / 2;
+
+          const y = level * verticalSpacing;
 
           return {
             id: wallet,
 
             position: {
-              x: level * 430,
+              x,
               y,
             },
 
@@ -2293,15 +2620,15 @@ function App() {
               borderRadius: 8,
 
               border: isTarget
-                ? "2px solid #ef4444"
-                : "1px solid #64748b",
+                ? "2px solid #FF5E68"
+                : "1px solid #789BA0",
 
               background:
                 isTarget
-                  ? "#3f1720"
-                  : "#172033",
+                  ? "#281316"
+                  : "#08181D",
 
-              color: "#ffffff",
+              color: "#F3FAFA",
 
               width: 240,
 
@@ -2398,7 +2725,7 @@ function App() {
               },
 
               labelBgStyle: {
-                fill: "#ffffff",
+                fill: "#F3FAFA",
               },
 
               labelBgPadding: [
@@ -2454,6 +2781,7 @@ function App() {
     }
 
     setPeelLoading(true);
+    setPeelExpanded(true);
     setError(null);
     setSelectedPeelCandidateKey(null);
 
@@ -2530,6 +2858,7 @@ function App() {
     }
 
     setCrossChainLoading(true);
+    setCrossChainExpanded(true);
     setError(null);
 
     try {
@@ -3332,8 +3661,27 @@ function App() {
   ========================= */
 
   function handleNodesChange(changes: NodeChange[]) {
+    // When path highlighting is active, only nodes that belong to the
+    // highlighted investigation path may be moved. Everything else stays
+    // fixed so the investigator can reposition the active path without
+    // disturbing the surrounding graph.
+    const allowedChanges =
+      highlightPathEnabled && selectedWallet
+        ? changes.filter((change) => {
+            if (change.type !== "position") {
+              return true;
+            }
+
+            return highlightedPathNodes.has(change.id);
+          })
+        : changes;
+
+    if (allowedChanges.length === 0) {
+      return;
+    }
+
     setNodes((currentNodes) =>
-      applyNodeChanges(changes, currentNodes),
+      applyNodeChanges(allowedChanges, currentNodes),
     );
   }
 
@@ -3393,19 +3741,29 @@ function App() {
       }
     });
 
-    const levelCounts = new Map<number, number>();
+    const nodesByLevel = new Map<number, Node[]>();
+
+    nodes.forEach((node) => {
+      const level = levels.get(node.id) ?? 0;
+      const levelNodes = nodesByLevel.get(level) ?? [];
+      levelNodes.push(node);
+      nodesByLevel.set(level, levelNodes);
+    });
 
     setNodes((currentNodes) =>
       currentNodes.map((node) => {
         const level = levels.get(node.id) ?? 0;
-        const index = levelCounts.get(level) ?? 0;
-        levelCounts.set(level, index + 1);
+        const levelNodes = nodesByLevel.get(level) ?? [];
+        const index = levelNodes.findIndex((item) => item.id === node.id);
+        const horizontalSpacing = 300;
+        const verticalSpacing = 300;
+        const levelWidth = (levelNodes.length - 1) * horizontalSpacing;
 
         return {
           ...node,
           position: {
-            x: level * 320,
-            y: index * 220,
+            x: index * horizontalSpacing - levelWidth / 2,
+            y: level * verticalSpacing,
           },
         };
       }),
@@ -3447,12 +3805,14 @@ function App() {
     setSelectedTransfer(null);
     setMlRisk(null);
     setAmlAssessment(null);
+    setHighlightPathEnabled(false);
     setSelectedWallet(node.id);
     const savedWallet = wallets.find(
       (wallet) => wallet.address.toLowerCase() === node.id.toLowerCase(),
     );
     setSelectedWalletId(savedWallet?.id ?? null);
     setInvestigationTab("wallet");
+    setInvestigationMenuOpen(true);
   }
 
   /* =========================
@@ -3475,12 +3835,23 @@ function App() {
       );
 
     if (matchingTransfer) {
-      setSelectedWallet(null);
+      // Keep the selected wallet/path active when a highlighted edge is
+      // clicked. Opening transaction details should not clear the
+      // investigation highlight.
+      const clickedEdgeIsHighlighted =
+        highlightPathEnabled &&
+        highlightedPathEdges.has(edge.id);
+
+      if (!clickedEdgeIsHighlighted) {
+        setSelectedWallet(null);
+        setHighlightPathEnabled(false);
+      }
 
       setSelectedTransfer(
         matchingTransfer,
       );
       setInvestigationTab("transaction");
+      setInvestigationMenuOpen(false);
     }
   }
 
@@ -3490,8 +3861,10 @@ function App() {
 
   function closeInvestigationPanel() {
     setSelectedWallet(null);
+    setHighlightPathEnabled(false);
     setSelectedTransfer(null);
     setInvestigationTab("wallet");
+    setInvestigationMenuOpen(true);
   }
 
   const selectedWalletTransactions =
@@ -3727,7 +4100,135 @@ function App() {
       .filter((value): value is string => Boolean(value)),
   );
 
+  /* =========================
+     GRAPH PATH HIGHLIGHTING
+  ========================= */
+
+  const highlightedPathNodes = new Set<string>();
+  const highlightedPathEdges = new Set<string>();
+
+  if (highlightPathEnabled && selectedWallet && filteredNodes.length > 0) {
+    const targetNode =
+      filteredNodes.find((node) =>
+        String(node.data?.label ?? "").startsWith("TARGET"),
+      ) ??
+      filteredNodes.find(
+        (node) =>
+          String(node.id).toLowerCase() === address.toLowerCase(),
+      );
+
+    if (targetNode) {
+      const adjacency = new Map<
+        string,
+        Array<{ neighbor: string; edgeId: string }>
+      >();
+
+      filteredNodes.forEach((node) => {
+        adjacency.set(node.id, []);
+      });
+
+      filteredEdges.forEach((edge) => {
+        adjacency.get(edge.source)?.push({
+          neighbor: edge.target,
+          edgeId: edge.id,
+        });
+        adjacency.get(edge.target)?.push({
+          neighbor: edge.source,
+          edgeId: edge.id,
+        });
+      });
+
+      const startId = targetNode.id;
+      const goalId = selectedWallet;
+      const previous = new Map<
+        string,
+        { nodeId: string; edgeId: string } | null
+      >();
+      const queue: string[] = [startId];
+      previous.set(startId, null);
+
+      let queueIndex = 0;
+      while (queueIndex < queue.length && !previous.has(goalId)) {
+        const current = queue[queueIndex++];
+
+        for (const connection of adjacency.get(current) ?? []) {
+          if (previous.has(connection.neighbor)) {
+            continue;
+          }
+
+          previous.set(connection.neighbor, {
+            nodeId: current,
+            edgeId: connection.edgeId,
+          });
+          queue.push(connection.neighbor);
+
+          if (connection.neighbor === goalId) {
+            break;
+          }
+        }
+      }
+
+      if (previous.has(goalId)) {
+        let current = goalId;
+        highlightedPathNodes.add(current);
+
+        while (current !== startId) {
+          const step = previous.get(current);
+          if (!step) {
+            break;
+          }
+
+          highlightedPathEdges.add(step.edgeId);
+          highlightedPathNodes.add(step.nodeId);
+          current = step.nodeId;
+        }
+      } else if (startId === goalId) {
+        highlightedPathNodes.add(startId);
+      }
+
+      // Also highlight every DIRECT OUTGOING transaction from the
+      // selected wallet. The path above shows Target -> selected wallet;
+      // this adds selected wallet -> its outgoing destinations so the
+      // investigator can see where funds continue to flow.
+      filteredEdges.forEach((edge) => {
+        if (
+          String(edge.source).toLowerCase() ===
+          goalId.toLowerCase()
+        ) {
+          highlightedPathEdges.add(edge.id);
+          highlightedPathNodes.add(edge.target);
+        }
+      });
+
+      highlightedPathNodes.add(goalId);
+    }
+  }
+
   const graphNodes = filteredNodes.map((node) => {
+    if (highlightPathEnabled && selectedWallet) {
+      const isHighlighted = highlightedPathNodes.has(node.id);
+
+      return {
+        ...node,
+        draggable: isHighlighted,
+        selectable: isHighlighted,
+        style: {
+          ...(node.style ?? {}),
+          pointerEvents: isHighlighted ? "auto" : "none",
+          border: isHighlighted
+            ? "2px solid #00F7FF"
+            : "1px solid #143038",
+          background: isHighlighted
+            ? "#04181B"
+            : "#02090C",
+          boxShadow: isHighlighted
+            ? "0 0 0 2px rgba(217,154,43,0.16), 0 0 22px rgba(217,154,43,0.38)"
+            : "none",
+          opacity: isHighlighted ? 1 : 0.22,
+        },
+      };
+    }
+
     if (!highlightedPeelCandidate) {
       return node;
     }
@@ -3741,11 +4242,11 @@ function App() {
       style: {
         ...(node.style ?? {}),
         border: isHighlighted
-          ? "3px solid #5eead4"
-          : "1px solid #334155",
+          ? "3px solid #00DCE6"
+          : "1px solid #174047",
         background: isHighlighted
-          ? "#123b36"
-          : "#0f172a",
+          ? "#102126"
+          : "#02090C",
         boxShadow: isHighlighted
           ? "0 0 18px rgba(94,234,212,0.35)"
           : "none",
@@ -3755,6 +4256,37 @@ function App() {
   });
 
   const graphEdges = filteredEdges.map((edge) => {
+    if (highlightPathEnabled && selectedWallet) {
+      const isHighlighted = highlightedPathEdges.has(edge.id);
+
+      return {
+        ...edge,
+        animated: false,
+        selectable: isHighlighted,
+        deletable: isHighlighted,
+        className: isHighlighted
+          ? "cg-path-highlight"
+          : "cg-path-dim",
+        style: {
+          ...(edge.style ?? {}),
+          strokeWidth: isHighlighted ? 4 : 1,
+          stroke: isHighlighted ? "#00F7FF" : "#14333A",
+          opacity: isHighlighted ? 1 : 0.14,
+          strokeDasharray: isHighlighted ? "8 6" : undefined,
+          filter: isHighlighted
+            ? "drop-shadow(0 0 5px rgba(217,154,43,0.85))"
+            : "none",
+          pointerEvents: isHighlighted ? "auto" : "none",
+        },
+        labelStyle: {
+          ...(edge.labelStyle ?? {}),
+          opacity: isHighlighted ? 1 : 0.12,
+          fontWeight: isHighlighted ? 800 : 600,
+          pointerEvents: isHighlighted ? "auto" : "none",
+        },
+      };
+    }
+
     if (!highlightedPeelCandidate) {
       return edge;
     }
@@ -3774,7 +4306,7 @@ function App() {
       style: {
         ...(edge.style ?? {}),
         strokeWidth: isHighlighted ? 5 : 1,
-        stroke: isHighlighted ? "#5eead4" : "#475569",
+        stroke: isHighlighted ? "#00DCE6" : "#34545A",
         opacity: isHighlighted ? 1 : 0.2,
       },
       labelStyle: {
@@ -3785,6 +4317,7 @@ function App() {
     };
   });
 
+
   return (
     <main
       style={{
@@ -3792,14 +4325,59 @@ function App() {
         height: "100vh",
         margin: 0,
         padding: 0,
-        background: "#0f1117",
-        color: "#ffffff",
+        background: "#02090C",
+        color: "#EAF7F8",
         overflow: "hidden",
         fontFamily:
-          "Arial, sans-serif",
+          "Inter, Arial, sans-serif",
       }}
     >
       <style>{responsiveCss}</style>
+      <style>{`
+        /* GRAPHITE + AMBER TYPOGRAPHY POLISH */
+        .cg-header,
+        .cg-sidebar,
+        .cg-investigation,
+        .cg-graph {
+          -webkit-font-smoothing: antialiased;
+          text-rendering: optimizeLegibility;
+        }
+
+        .cg-header button,
+        .cg-sidebar button,
+        .cg-investigation button,
+        .cg-graph button {
+          font-weight: 600 !important;
+        }
+
+        .cg-sidebar input,
+        .cg-sidebar select,
+        .cg-sidebar textarea,
+        .cg-investigation input,
+        .cg-investigation select,
+        .cg-investigation textarea {
+          font-weight: 500 !important;
+        }
+
+        .cg-graph .react-flow__node {
+          font-weight: 500;
+        }
+
+        .cg-graph .react-flow__edge-text {
+          font-weight: 600 !important;
+        }
+
+        /* During path highlighting, locked graph elements must not capture
+           the mouse so the React Flow pane can still be panned freely. */
+        .cg-graph .cg-path-dim,
+        .cg-graph .cg-path-dim * {
+          pointer-events: none !important;
+        }
+
+        .cg-graph .react-flow__node {
+          touch-action: none;
+        }
+      `}</style>
 
       {/* =====================
           TOP BAR
@@ -3808,30 +4386,86 @@ function App() {
       <header
         className="cg-header"
         style={{
-          height: "70px",
+          height: "64px",
           display: "flex",
           alignItems: "center",
-          justifyContent:
-            "space-between",
-          padding:
-            "0 24px",
-          background:
-            "#171a23",
-          borderBottom:
-            "1px solid #2b3040",
-          boxSizing:
-            "border-box",
-          position:
-            "relative",
+          justifyContent: "space-between",
+          padding: "0 18px 0 24px",
+          background: "rgba(7, 20, 22, 0.97)",
+          borderBottom: "1px solid #123039",
+          boxSizing: "border-box",
+          position: "relative",
           zIndex: 50,
+          gap: "20px",
         }}
       >
-        <div>
+        {/* BRAND */}
+        <div
+          style={{
+            minWidth: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            justifyContent: "center",
+          }}
+        >
+          {/* Crypto Guard logo */}
+          <div
+            aria-hidden="true"
+            style={{
+              width: "30px",
+              height: "34px",
+              flex: "0 0 auto",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <svg
+              width="30"
+              height="34"
+              viewBox="0 0 30 34"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M15 2L27 9V23L15 30L3 23V9L15 2Z"
+                stroke="#00F7FF"
+                strokeWidth="1.7"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M3 9L15 16L27 9M15 16V30"
+                stroke="#00F7FF"
+                strokeWidth="1.7"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M9 12.5L15 9L21 12.5V19.5L15 23L9 19.5V12.5Z"
+                stroke="#00F7FF"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
+
+          <div
+            style={{
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+            }}
+          >
           <h1
             style={{
               margin: 0,
-              fontSize:
-                "22px",
+              fontSize: "18px",
+              lineHeight: 1.1,
+              fontWeight: 800,
+              letterSpacing: "-0.3px",
+              color: "#F3FAFA",
+              whiteSpace: "nowrap",
             }}
           >
             Crypto Guard V2
@@ -3839,31 +4473,165 @@ function App() {
 
           <div
             style={{
-              marginTop:
-                "5px",
-              fontSize:
-                "12px",
-              color:
-                health?.status ===
-                "healthy"
-                  ? "#4ade80"
-                  : "#f87171",
+              marginTop: "4px",
+              fontSize: "10px",
+              lineHeight: 1.2,
+              color: "#8EADB1",
+              letterSpacing: "0.2px",
+              whiteSpace: "nowrap",
+              fontWeight: 500,
             }}
           >
-            Backend:{" "}
-            {health?.status ??
-              "checking..."}
+            Cryptocurrency Investigation & Intelligence Platform
+          </div>
           </div>
         </div>
 
+        {/* INVESTIGATION CONTEXT */}
+        {token && (
+          <div
+            className="cg-header-context"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "7px 11px",
+                background: "#07171C",
+                border: "1px solid #14333A",
+                borderRadius: "8px",
+                minWidth: 0,
+                maxWidth: "100%",
+              }}
+            >
+              <span style={{
+                fontSize: "10px",
+                color: "#8EADB1",
+                textTransform: "uppercase",
+                letterSpacing: "0.6px",
+                fontWeight: 700,
+              }}>
+                Case
+              </span>
+
+              <span style={{
+                color: "#EAF7F8",
+                fontSize: "12px",
+                fontWeight: 700,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}>
+                {selectedCase?.title ?? "No case selected"}
+              </span>
+
+              <span style={{ color: "#174047", fontSize: "13px" }}>•</span>
+
+              <span style={{
+                fontSize: "10px",
+                color: "#8EADB1",
+                textTransform: "uppercase",
+                letterSpacing: "0.6px",
+                fontWeight: 700,
+              }}>
+                Chain
+              </span>
+
+              <span style={{
+                color: "#49D6A0",
+                fontSize: "12px",
+                fontWeight: 700,
+                textTransform: "capitalize",
+              }}>
+                {chain}
+              </span>
+
+              {selectedWallet && (
+                <>
+                  <span style={{ color: "#174047", fontSize: "13px" }}>•</span>
+
+                  <span style={{
+                    fontSize: "10px",
+                    color: "#8EADB1",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.6px",
+                    fontWeight: 700,
+                  }}>
+                    Wallet
+                  </span>
+
+                  <span
+                    style={{
+                      color: "#B8D4D7",
+                      fontSize: "11px",
+                      fontFamily: "monospace",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      maxWidth: "180px",
+                    }}
+                    title={selectedWallet}
+                  >
+                    {selectedWallet.slice(0, 8)}...
+                    {selectedWallet.slice(-6)}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ACTIONS */}
         {token && (
           <div
             style={{
               display: "flex",
               alignItems: "center",
               gap: "8px",
+              flexShrink: 0,
             }}
           >
+            {/* LIVE INDICATOR */}
+            <div
+              title="Investigation workspace active"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "7px 9px",
+                border: "1px solid #14333A",
+                borderRadius: "8px",
+                background: "#071418",
+              }}
+            >
+              <span style={{
+                width: "7px",
+                height: "7px",
+                borderRadius: "50%",
+                background: "#00F7FF",
+                boxShadow: "0 0 8px rgba(74, 222, 128, 0.45)",
+              }} />
+              <span style={{
+                fontSize: "10px",
+                color: "#B8D4D7",
+                fontWeight: 700,
+                letterSpacing: "0.4px",
+              }}>
+                LIVE
+              </span>
+            </div>
+
+            {/* REPORT */}
             <button
               type="button"
               onClick={handleGenerateReport}
@@ -3875,179 +4643,507 @@ function App() {
               }
               style={{
                 ...workspaceToggleButtonStyle,
-                background: reportLoading ? "#1e3a8a" : "#2563eb",
-                borderColor: "#2563eb",
+                background: reportLoading ? "#063A40" : "#00F7FF",
+                color: reportLoading ? "#D8EAEC" : "#02090C",
+                borderColor: "#00F7FF",
                 opacity: reportLoading || !selectedCase ? 0.65 : 1,
-                cursor: reportLoading || !selectedCase ? "not-allowed" : "pointer",
+                cursor:
+                  reportLoading || !selectedCase ? "not-allowed" : "pointer",
                 fontWeight: 700,
+                fontSize: "16px",
               }}
             >
               {reportLoading ? "Generating..." : "📄 Report"}
             </button>
+
+            {/* WORKSPACE */}
             <button
               type="button"
-              onClick={() => setSidebarCollapsed((current) => !current)}
-              title={sidebarCollapsed ? "Open workspace panel" : "Collapse workspace panel"}
+              onClick={() => {
+                setSidebarCollapsed((current) => {
+                  const next = !current;
+                  window.setTimeout(() => {
+                    reactFlowInstance?.fitView({ padding: 0.18 });
+                  }, 120);
+                  return next;
+                });
+              }}
+              title={
+                sidebarCollapsed
+                  ? "Open workspace panel"
+                  : "Collapse workspace panel"
+              }
               style={workspaceToggleButtonStyle}
             >
               {sidebarCollapsed ? "☰ Workspace" : "☰"}
             </button>
+
+            {/* LOGOUT */}
             <button
-              onClick={
-                handleLogout
-              }
-            style={{
-              background:
-                "#272d3a",
-              color:
-                "#ffffff",
-              border:
-                "1px solid #475569",
-              borderRadius:
-                "6px",
-              padding:
-                "8px 16px",
-              cursor:
-                "pointer",
-            }}
-          >
-            Logout
-          </button>
+              type="button"
+              onClick={handleLogout}
+              style={{
+                background: "#14323A",
+                color: "#F3FAFA",
+                border: "1px solid #3D5B5F",
+                borderRadius: "8px",
+                padding: "8px 14px",
+                cursor: "pointer",
+                fontWeight: 700,
+              }}
+            >
+              Logout
+            </button>
           </div>
         )}
       </header>
 
       {/* =====================
-          LOGIN
+          AUTHENTICATION
       ===================== */}
 
       {!token && (
         <section
           style={{
-            position:
-              "absolute",
+            position: "absolute",
             zIndex: 100,
-            top: "100px",
+            top: "78px",
             left: "50%",
-            transform:
-              "translateX(-50%)",
-            width: "360px",
-            background:
-              "#171a23",
-            border:
-              "1px solid #2f3545",
-            borderRadius:
-              "12px",
-            padding:
-              "28px",
-            boxSizing:
-              "border-box",
+            transform: "translateX(-50%)",
+            width: "390px",
+            maxWidth: "calc(100vw - 32px)",
+            maxHeight: "calc(100vh - 94px)",
+            overflowY: "auto",
+            background: "#071418",
+            border: "1px solid #174047",
+            borderRadius: "16px",
+            padding: "28px",
+            boxSizing: "border-box",
             boxShadow:
-              "0 20px 50px rgba(0,0,0,0.4)",
+              "0 20px 50px rgba(0,0,0,0.45)",
           }}
         >
-          <h2
+          <div
             style={{
-              marginTop:
-                0,
-              marginBottom:
-                "8px",
-              textAlign:
-                "center",
+              textAlign: "center",
+              marginBottom: "22px",
             }}
           >
-            Sign in
-          </h2>
+            <div
+              style={{
+                width: "44px",
+                height: "44px",
+                margin: "0 auto 12px",
+                borderRadius: "12px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background:
+                  "rgba(0,247,255,0.08)",
+                border:
+                  "1px solid rgba(0,247,255,0.35)",
+                color: "#00F7FF",
+                fontSize: "20px",
+                fontWeight: 800,
+              }}
+            >
+              CG
+            </div>
 
-          <p
-            style={{
-              color:
-                "#94a3b8",
-              fontSize:
-                "13px",
-              marginBottom:
-                "20px",
-              textAlign:
-                "center",
-            }}
-          >
-            Login to access
-            blockchain
-            tracing.
-          </p>
+            <h2
+              style={{
+                margin: 0,
+                marginBottom: "7px",
+                fontSize: "24px",
+                letterSpacing: "-0.02em",
+              }}
+            >
+              Crypto Guard
+            </h2>
+
+            <p
+              style={{
+                color: "#A9C5C8",
+                fontSize: "13px",
+                margin: 0,
+              }}
+            >
+              {authMode === "login"
+                ? "Sign in to access blockchain tracing."
+                : authMode === "register"
+                  ? "Create your analyst account to get started."
+                  : "Verify your email to activate your analyst account."}
+            </p>
+          </div>
+
+          {authMode !== "verify" && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "6px",
+                padding: "4px",
+                marginBottom: "20px",
+                background: "#02090C",
+                border: "1px solid #122F35",
+                borderRadius: "10px",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("login");
+                  setError(null);
+                  setAuthNotice(null);
+                }}
+                style={{
+                  border:
+                    "1px solid " +
+                    (authMode === "login"
+                      ? "#00F7FF"
+                      : "transparent"),
+                  borderRadius: "7px",
+                  padding: "9px 10px",
+                  background:
+                    authMode === "login"
+                      ? "rgba(0,247,255,0.10)"
+                      : "transparent",
+                  color:
+                    authMode === "login"
+                      ? "#00F7FF"
+                      : "#A9C5C8",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: "14px",
+                }}
+              >
+                Sign In
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("register");
+                  setError(null);
+                  setAuthNotice(null);
+                }}
+                style={{
+                  border:
+                    "1px solid " +
+                    (authMode === "register"
+                      ? "#00F7FF"
+                      : "transparent"),
+                  borderRadius: "7px",
+                  padding: "9px 10px",
+                  background:
+                    authMode === "register"
+                      ? "rgba(0,247,255,0.10)"
+                      : "transparent",
+                  color:
+                    authMode === "register"
+                      ? "#00F7FF"
+                      : "#A9C5C8",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: "14px",
+                }}
+              >
+                Create Account
+              </button>
+            </div>
+          )}
 
           <form
             onSubmit={
-              handleLogin
+              authMode === "login"
+                ? handleLogin
+                : authMode === "register"
+                  ? handleRegister
+                  : handleVerifyEmail
             }
           >
-            <label
-              style={
-                labelStyle
-              }
-            >
-              Email
-            </label>
+            {authMode === "verify" ? (
+              <>
+                <label style={labelStyle}>
+                  Verification Email
+                </label>
 
-            <input
-              type="email"
-              value={
-                email
-              }
-              onChange={(
-                event,
-              ) =>
-                setEmail(
-                  event.target
-                    .value,
-                )
-              }
-              required
-              style={
-                inputStyle
-              }
-            />
+                <input
+                  type="email"
+                  value={verificationEmail}
+                  onChange={(event) =>
+                    setVerificationEmail(
+                      event.target.value,
+                    )
+                  }
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  required
+                  style={inputStyle}
+                />
 
-            <label
-              style={
-                labelStyle
-              }
-            >
-              Password
-            </label>
+                <label
+                  style={{
+                    ...labelStyle,
+                    marginTop: "14px",
+                  }}
+                >
+                  Verification Code
+                </label>
 
-            <input
-              type="password"
-              value={
-                password
-              }
-              onChange={(
-                event,
-              ) =>
-                setPassword(
-                  event.target
-                    .value,
-                )
-              }
-              required
-              style={
-                inputStyle
-              }
-            />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={verificationCode}
+                  onChange={(event) =>
+                    setVerificationCode(
+                      event.target.value
+                        .replace(/\D/g, "")
+                        .slice(0, 6),
+                    )
+                  }
+                  placeholder="Enter 6-digit code"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  required
+                  style={{
+                    ...inputStyle,
+                    letterSpacing: "0.22em",
+                    textAlign: "center",
+                    fontSize: "18px",
+                    fontWeight: 700,
+                  }}
+                />
+              </>
+            ) : (
+              <>
+                {authMode === "register" && (
+                  <>
+                    <label style={labelStyle}>
+                      Full Name
+                    </label>
 
-            <button
-              type="submit"
-              disabled={
-                loginLoading
-              }
-              style={
-                primaryButtonStyle
-              }
-            >
-              {loginLoading
-                ? "Signing in..."
-                : "Sign In"}
-            </button>
+                    <input
+                      type="text"
+                      value={fullName}
+                      onChange={(event) =>
+                        setFullName(
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Your full name"
+                      autoComplete="name"
+                      style={inputStyle}
+                    />
+                  </>
+                )}
+
+                <label style={labelStyle}>
+                  Email
+                </label>
+
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) =>
+                    setEmail(
+                      event.target.value,
+                    )
+                  }
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  required
+                  style={inputStyle}
+                />
+
+                <label style={labelStyle}>
+                  Password
+                </label>
+
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) =>
+                    setPassword(
+                      event.target.value,
+                    )
+                  }
+                  placeholder="Enter your password"
+                  autoComplete={
+                    authMode === "login"
+                      ? "current-password"
+                      : "new-password"
+                  }
+                  required
+                  style={inputStyle}
+                />
+
+                {authMode === "register" && (
+                  <>
+                    <label style={labelStyle}>
+                      Confirm Password
+                    </label>
+
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(event) =>
+                        setConfirmPassword(
+                          event.target.value,
+                        )
+                      }
+                      placeholder="Re-enter your password"
+                      autoComplete="new-password"
+                      required
+                      style={inputStyle}
+                    />
+                  </>
+                )}
+              </>
+            )}
+
+            {authNotice && (
+              <div
+                role="status"
+                style={{
+                  marginTop: "14px",
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  border:
+                    "1px solid rgba(58,214,141,0.38)",
+                  background:
+                    "rgba(58,214,141,0.08)",
+                  color: "#8DE8B8",
+                  fontSize: "13px",
+                  lineHeight: 1.4,
+                }}
+              >
+                {authNotice}
+              </div>
+            )}
+
+            {error && (
+              <div
+                role="alert"
+                style={{
+                  marginTop: "14px",
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  border:
+                    "1px solid rgba(255,129,127,0.45)",
+                  background:
+                    "rgba(255,129,127,0.08)",
+                  color: "#FFAAA7",
+                  fontSize: "13px",
+                  lineHeight: 1.4,
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            {authMode === "verify" ? (
+              <>
+                <button
+                  type="submit"
+                  disabled={loginLoading}
+                  style={{
+                    ...primaryButtonStyle,
+                    marginTop: "18px",
+                    opacity:
+                      loginLoading ? 0.65 : 1,
+                    cursor:
+                      loginLoading
+                        ? "not-allowed"
+                        : "pointer",
+                  }}
+                >
+                  {loginLoading
+                    ? "Verifying..."
+                    : "Verify Email"}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={loginLoading}
+                  onClick={handleResendVerification}
+                  style={{
+                    width: "100%",
+                    marginTop: "9px",
+                    padding: "11px 14px",
+                    borderRadius: "8px",
+                    border:
+                      "1px solid #24484F",
+                    background: "#0B1E23",
+                    color: "#B9D3D6",
+                    cursor:
+                      loginLoading
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity:
+                      loginLoading ? 0.65 : 1,
+                    fontWeight: 700,
+                  }}
+                >
+                  {loginLoading
+                    ? "Sending..."
+                    : "Resend Code"}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={loginLoading}
+                  onClick={() => {
+                    setAuthMode("login");
+                    setVerificationCode("");
+                    setError(null);
+                    setAuthNotice(null);
+                    setEmail(
+                      verificationEmail.trim(),
+                    );
+                  }}
+                  style={{
+                    width: "100%",
+                    marginTop: "9px",
+                    padding: "10px 14px",
+                    border: "none",
+                    background: "transparent",
+                    color: "#6FBFC5",
+                    cursor:
+                      loginLoading
+                        ? "not-allowed"
+                        : "pointer",
+                    fontWeight: 700,
+                    fontSize: "13px",
+                  }}
+                >
+                  ← Back to Sign In
+                </button>
+              </>
+            ) : (
+              <button
+                type="submit"
+                disabled={loginLoading}
+                style={{
+                  ...primaryButtonStyle,
+                  marginTop: "18px",
+                  opacity:
+                    loginLoading ? 0.65 : 1,
+                  cursor:
+                    loginLoading
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {loginLoading
+                  ? authMode === "login"
+                    ? "Signing in..."
+                    : "Creating account..."
+                  : authMode === "login"
+                    ? "Sign In"
+                    : "Create Account"}
+              </button>
+            )}
           </form>
         </section>
       )}
@@ -4063,25 +5159,25 @@ function App() {
             position:
               "absolute",
             zIndex: 20,
-            top: "86px",
-            left: "20px",
-            width: "390px",
+            top: "78px",
+            left: "16px",
+            width: "380px",
             maxHeight:
-              "calc(100vh - 106px)",
+              "calc(100vh - 94px)",
             overflowY:
               "auto",
             background:
-              "#171a23",
+              "rgba(11, 16, 24, 0.98)",
             border:
-              "1px solid #2f3545",
+              "1px solid #12262B",
             borderRadius:
-              "10px",
-            padding:
               "16px",
+            padding:
+              "14px",
             boxSizing:
               "border-box",
             boxShadow:
-              "0 10px 30px rgba(0,0,0,0.35)",
+              "0 16px 42px rgba(0,0,0,0.42)",
           }}
         >
           {/* ===================
@@ -4093,7 +5189,7 @@ function App() {
               paddingBottom:
                 "14px",
               borderBottom:
-                "1px solid #2f3545",
+                "1px solid #12252A",
             }}
           >
             <div
@@ -4110,7 +5206,11 @@ function App() {
                 style={{
                   margin: 0,
                   fontSize:
-                    "18px",
+                    "13px",
+                  letterSpacing:
+                    "0.08em",
+                  textTransform:
+                    "uppercase",
                 }}
               >
                 Cases
@@ -4125,9 +5225,9 @@ function App() {
                 }
                 style={{
                   background:
-                    "#2563eb",
+                    "#00F7FF",
                   color:
-                    "#ffffff",
+                    "#02090C",
                   border:
                     "none",
                   borderRadius:
@@ -4137,7 +5237,7 @@ function App() {
                   cursor:
                     "pointer",
                   fontSize:
-                    "11px",
+                    "14px",
                   fontWeight:
                     600,
                 }}
@@ -4159,9 +5259,9 @@ function App() {
                   padding:
                     "12px",
                   background:
-                    "#0f1117",
+                    "#02090C",
                   border:
-                    "1px solid #3b4254",
+                    "1px solid #174047",
                   borderRadius:
                     "7px",
                 }}
@@ -4255,11 +5355,11 @@ function App() {
                     textAlign:
                       "center",
                     color:
-                      "#94a3b8",
+                      "#A9C5C8",
                     fontSize:
                       "12px",
                     border:
-                      "1px dashed #3b4254",
+                      "1px dashed #174047",
                     borderRadius:
                       "6px",
                   }}
@@ -4289,12 +5389,12 @@ function App() {
                             "7px",
                           background:
                             isSelected
-                              ? "#202a3d"
-                              : "#0f1117",
+                              ? "#0B1D22"
+                              : "#02090C",
                           border:
                             isSelected
-                              ? "1px solid #2563eb"
-                              : "1px solid #3b4254",
+                              ? "1px solid #00F7FF"
+                              : "1px solid #174047",
                           borderRadius:
                             "7px",
                           cursor:
@@ -4366,8 +5466,8 @@ function App() {
                               color:
                                 item.status ===
                                 "open"
-                                  ? "#4ade80"
-                                  : "#94a3b8",
+                                  ? "#00F7FF"
+                                  : "#A9C5C8",
                             }}
                           >
                             {
@@ -4382,7 +5482,7 @@ function App() {
                               marginTop:
                                 "5px",
                               color:
-                                "#94a3b8",
+                                "#A9C5C8",
                               fontSize:
                                 "10px",
                               lineHeight:
@@ -4413,11 +5513,11 @@ function App() {
                               marginTop:
                                 "8px",
                               background:
-                                "#3f1720",
+                                "#281316",
                               color:
-                                "#fecaca",
+                                "#FFC1BE",
                               border:
-                                "1px solid #ef4444",
+                                "1px solid #FF5E68",
                               borderRadius:
                                 "5px",
                               padding:
@@ -4425,7 +5525,7 @@ function App() {
                               cursor:
                                 "pointer",
                               fontSize:
-                                "10px",
+                                "14px",
                             }}
                           >
                             Delete Case
@@ -4449,7 +5549,7 @@ function App() {
                 padding:
                   "14px 0",
                 borderBottom:
-                  "1px solid #2f3545",
+                  "1px solid #12252A",
               }}
             >
               <div
@@ -4457,7 +5557,7 @@ function App() {
                   fontSize:
                     "10px",
                   color:
-                    "#94a3b8",
+                    "#A9C5C8",
                   textTransform:
                     "uppercase",
                 }}
@@ -4468,9 +5568,9 @@ function App() {
               <div
                 style={{
                   marginTop:
-                    "4px",
+                    "5px",
                   fontSize:
-                    "15px",
+                    "14px",
                   fontWeight:
                     700,
                 }}
@@ -4487,7 +5587,7 @@ function App() {
                   fontSize:
                     "11px",
                   color:
-                    "#94a3b8",
+                    "#A9C5C8",
                 }}
               >
                 Case #
@@ -4504,16 +5604,17 @@ function App() {
                 type="button"
                 onClick={handleGenerateReport}
                 disabled={reportLoading}
+                className="cg-generate-report"
                 style={{
                   marginTop: "10px",
                   width: "100%",
                   padding: "8px 10px",
-                  border: "1px solid #2563eb",
+                  border: "1px solid #49D6A0",
                   borderRadius: "6px",
-                  background: reportLoading ? "#1e3a8a" : "#2563eb",
-                  color: "#ffffff",
+                  background: reportLoading ? "#163A32" : "#49D6A0",
+                  color: "#02090C",
                   cursor: reportLoading ? "not-allowed" : "pointer",
-                  fontSize: "10px",
+                  fontSize: "16px",
                   fontWeight: 700,
                 }}
               >
@@ -4532,7 +5633,7 @@ function App() {
                 padding:
                   "14px 0",
                 borderBottom:
-                  "1px solid #2f3545",
+                  "1px solid #12252A",
               }}
             >
               <div
@@ -4549,7 +5650,11 @@ function App() {
                   style={{
                     margin: 0,
                     fontSize:
-                      "16px",
+                      "13px",
+                    letterSpacing:
+                      "0.06em",
+                    textTransform:
+                      "uppercase",
                   }}
                 >
                   Case Wallets
@@ -4565,9 +5670,9 @@ function App() {
                   }
                   style={{
                     background:
-                      "#2563eb",
+                      "#00F7FF",
                     color:
-                      "#ffffff",
+                      "#02090C",
                     border:
                       "none",
                     borderRadius:
@@ -4577,7 +5682,7 @@ function App() {
                     cursor:
                       "pointer",
                     fontSize:
-                      "11px",
+                      "14px",
                     fontWeight:
                       600,
                   }}
@@ -4599,9 +5704,9 @@ function App() {
                     padding:
                       "12px",
                     background:
-                      "#0f1117",
+                      "#02090C",
                     border:
-                      "1px solid #3b4254",
+                      "1px solid #174047",
                     borderRadius:
                       "7px",
                   }}
@@ -4737,11 +5842,11 @@ function App() {
                       textAlign:
                         "center",
                       color:
-                        "#94a3b8",
+                        "#A9C5C8",
                       fontSize:
                         "11px",
                       border:
-                        "1px dashed #3b4254",
+                        "1px dashed #174047",
                       borderRadius:
                         "6px",
                     }}
@@ -4810,12 +5915,12 @@ function App() {
                               "7px",
                             background:
                               selected
-                                ? "#202a3d"
-                                : "#0f1117",
+                                ? "#0B1D22"
+                                : "#02090C",
                             border:
                               selected
-                                ? "1px solid #2563eb"
-                                : "1px solid #3b4254",
+                                ? "1px solid #00F7FF"
+                                : "1px solid #174047",
                             borderRadius:
                               "6px",
                             cursor:
@@ -4862,11 +5967,11 @@ function App() {
                               }
                               style={{
                                 background:
-                                  "#3f1720",
+                                  "#281316",
                                 color:
-                                  "#fecaca",
+                                  "#FFC1BE",
                                 border:
-                                  "1px solid #ef4444",
+                                  "1px solid #FF5E68",
                                 borderRadius:
                                   "4px",
                                 padding:
@@ -4874,7 +5979,7 @@ function App() {
                                 cursor:
                                   "pointer",
                                 fontSize:
-                                  "9px",
+                                  "14px",
                               }}
                             >
                               Delete
@@ -4886,7 +5991,7 @@ function App() {
                               marginTop:
                                 "5px",
                               color:
-                                "#cbd5e1",
+                                "#C9E0E3",
                               fontSize:
                                 "10px",
                               wordBreak:
@@ -4905,7 +6010,7 @@ function App() {
                               marginTop:
                                 "3px",
                               color:
-                                "#64748b",
+                                "#789BA0",
                               fontSize:
                                 "9px",
                               textTransform:
@@ -4934,11 +6039,17 @@ function App() {
               <h3
                 style={{
                   margin:
-                    "16px 0 14px",
+                    "16px 0 12px",
                   fontSize:
-                    "18px",
+                    "13px",
+                  letterSpacing:
+                    "0.08em",
+                  textTransform:
+                    "uppercase",
+                  color:
+                    "#EAF7F8",
                   textAlign:
-                    "center",
+                    "left",
                 }}
               >
                 Wallet Tracing
@@ -5150,11 +6261,11 @@ function App() {
                     paddingTop:
                       "12px",
                     borderTop:
-                      "1px solid #2f3545",
+                      "1px solid #12252A",
                     fontSize:
                       "12px",
                     color:
-                      "#cbd5e1",
+                      "#C9E0E3",
                     lineHeight:
                       1.8,
                   }}
@@ -5226,7 +6337,7 @@ function App() {
                 style={{
                   marginTop: "14px",
                   paddingTop: "14px",
-                  borderTop: "1px solid #2f3545",
+                  borderTop: "1px solid #12252A",
                 }}
               >
                 <div
@@ -5237,11 +6348,15 @@ function App() {
                     gap: "8px",
                   }}
                 >
-                  <div>
+                  <div style={{ minWidth: 0, textAlign: "left" }}>
                     <h3
                       style={{
                         margin: 0,
                         fontSize: "15px",
+                        fontWeight: 700,
+                        lineHeight: 1.25,
+                        letterSpacing: "0.02em",
+                        textAlign: "left",
                       }}
                     >
                       Peel Chain Analysis
@@ -5249,31 +6364,60 @@ function App() {
                     <div
                       style={{
                         marginTop: "4px",
-                        fontSize: "10px",
-                        color: "#94a3b8",
+                        fontSize: "9px",
+                        color: "#8EADB1",
                         lineHeight: 1.4,
                       }}
                     >
-                      Research-stage analysis of sequential outgoing transfers already stored in Neo4j.
+                      Sequential outgoing transfer analysis from stored Neo4j data.
                     </div>
                   </div>
-                  {peelChain && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    {peelChain && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPeelChain(null);
+                          setSelectedPeelCandidateKey(null);
+                          setPeelFilter("all");
+                          setPeelSort("strongest");
+                        }}
+                        style={{
+                          ...secondaryButtonStyle,
+                          width: "auto",
+                          marginTop: 0,
+                          padding: "5px 7px",
+                          fontSize: "16px",
+                        }}
+                      >
+                        Clear
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => {
-                        setPeelChain(null);
-                        setSelectedPeelCandidateKey(null);
-                        setPeelFilter("all");
-                        setPeelSort("strongest");
+                      aria-expanded={peelExpanded}
+                      onClick={() => setPeelExpanded((current) => !current)}
+                      style={{
+                        width: "30px",
+                        height: "30px",
+                        padding: 0,
+                        borderRadius: "8px",
+                        border: "1px solid #174047",
+                        background: peelExpanded ? "#13272C" : "#061116",
+                        color: peelExpanded ? "#65F9FF" : "#A9C5C8",
+                        cursor: "pointer",
+                        fontSize: "16px",
+                        lineHeight: 1,
                       }}
-                      style={secondaryButtonStyle}
                     >
-                      Clear
+                      {peelExpanded ? "−" : "+"}
                     </button>
-                  )}
+                  </div>
                 </div>
 
-                <label style={labelStyle}>Max Hops</label>
+                {peelExpanded && (
+                  <>
+                    <label style={labelStyle}>Max Hops</label>
                 <select
                   value={peelMaxHops}
                   onChange={(event) => setPeelMaxHops(event.target.value)}
@@ -5291,7 +6435,7 @@ function App() {
                   disabled={peelLoading}
                   style={{
                     ...primaryButtonStyle,
-                    background: "#0f766e",
+                    background: "#0A6E73",
                   }}
                 >
                   {peelLoading ? "Analyzing Peel Chain..." : "Analyze Peel Chain"}
@@ -5308,7 +6452,7 @@ function App() {
                     >
                       <div style={miniStatStyle}>
                         <span>Status</span>
-                        <strong style={{ color: "#4ade80" }}>{peelChain.status}</strong>
+                        <strong style={{ color: "#00F7FF" }}>{peelChain.status}</strong>
                       </div>
                       <div style={miniStatStyle}>
                         <span>Candidates</span>
@@ -5328,9 +6472,9 @@ function App() {
                       style={{
                         marginTop: "10px",
                         padding: "9px",
-                        border: "1px solid #334155",
+                        border: "1px solid #174047",
                         borderRadius: "7px",
-                        background: "#111827",
+                        background: "#061116",
                       }}
                     >
                       <div
@@ -5342,8 +6486,8 @@ function App() {
                           marginBottom: "7px",
                         }}
                       >
-                        <span style={{ fontSize: "10px", color: "#cbd5e1" }}>Candidates</span>
-                        <span style={{ fontSize: "9px", color: "#94a3b8" }}>
+                        <span style={{ fontSize: "10px", color: "#D8EAEC" }}>Candidates</span>
+                        <span style={{ fontSize: "9px", color: "#B8D4D7" }}>
                           Showing {filteredPeelCandidates.length} of {peelChain.candidates.length}
                         </span>
                       </div>
@@ -5388,7 +6532,7 @@ function App() {
                             width: "100%",
                             marginTop: "7px",
                             padding: "7px",
-                            fontSize: "10px",
+                            fontSize: "16px",
                           }}
                         >
                           Clear Graph Highlight
@@ -5401,9 +6545,9 @@ function App() {
                         style={{
                           marginTop: "10px",
                           padding: "12px",
-                          border: "1px solid #334155",
+                          border: "1px solid #174047",
                           borderRadius: "7px",
-                          color: "#94a3b8",
+                          color: "#B8D4D7",
                           fontSize: "10px",
                           textAlign: "center",
                         }}
@@ -5424,8 +6568,8 @@ function App() {
                           style={{
                             marginTop: "10px",
                             padding: "10px",
-                            background: "#0f1117",
-                            border: "1px solid #3b4254",
+                            background: "#02090C",
+                            border: "1px solid #174047",
                             borderRadius: "7px",
                           }}
                         >
@@ -5443,8 +6587,8 @@ function App() {
                                 fontSize: "9px",
                                 padding: "3px 6px",
                                 borderRadius: "999px",
-                                background: "#123b36",
-                                color: "#5eead4",
+                                background: "#102126",
+                                color: "#00DCE6",
                               }}
                             >
                               {candidate.hop_count} hops
@@ -5462,15 +6606,15 @@ function App() {
                               padding: "6px 8px",
                               borderRadius: "5px",
                               border: getPeelCandidateKey(candidate) === selectedPeelCandidateKey
-                                ? "1px solid #5eead4"
-                                : "1px solid #334155",
+                                ? "1px solid #00DCE6"
+                                : "1px solid #174047",
                               background: getPeelCandidateKey(candidate) === selectedPeelCandidateKey
-                                ? "#123b36"
-                                : "#111827",
+                                ? "#102126"
+                                : "#061116",
                               color: getPeelCandidateKey(candidate) === selectedPeelCandidateKey
-                                ? "#5eead4"
-                                : "#cbd5e1",
-                              fontSize: "9px",
+                                ? "#00DCE6"
+                                : "#C9E0E3",
+                              fontSize: "16px",
                               cursor: "pointer",
                             }}
                           >
@@ -5483,16 +6627,16 @@ function App() {
                             style={{
                               marginTop: "8px",
                               padding: "7px 8px",
-                              border: "1px solid #334155",
+                              border: "1px solid #174047",
                               borderRadius: "6px",
                               display: "flex",
                               justifyContent: "space-between",
                               alignItems: "center",
                               gap: "8px",
-                              background: "#111827",
+                              background: "#061116",
                             }}
                           >
-                            <span style={{ fontSize: "9px", color: "#94a3b8" }}>Pattern signals</span>
+                            <span style={{ fontSize: "9px", color: "#B8D4D7" }}>Pattern signals</span>
                             <strong style={{ fontSize: "10px", color: pattern.color }}>
                               {pattern.label} · {pattern.signalCount}/5
                             </strong>
@@ -5519,17 +6663,17 @@ function App() {
                                     title={wallet.address}
                                     style={{
                                       padding: "8px 9px",
-                                      border: "1px solid #334155",
+                                      border: "1px solid #174047",
                                       borderRadius: "6px",
-                                      background: walletIndex === 0 ? "#111827" : "#0f172a",
+                                      background: walletIndex === 0 ? "#061116" : "#02090C",
                                       fontSize: "9px",
-                                      color: "#e2e8f0",
+                                      color: "#EAF7F8",
                                       overflow: "hidden",
                                     }}
                                   >
                                     <div
                                       style={{
-                                        color: "#64748b",
+                                        color: "#8EADB1",
                                         fontSize: "8px",
                                         marginBottom: "4px",
                                         letterSpacing: "0.04em",
@@ -5574,9 +6718,9 @@ function App() {
                                     >
                                       <span
                                         style={{
-                                          fontSize: "12px",
+                                          fontSize: "16px",
                                           lineHeight: 1,
-                                          color: "#5eead4",
+                                          color: "#00DCE6",
                                         }}
                                       >
                                         ↓
@@ -5584,8 +6728,8 @@ function App() {
                                       <span
                                         style={{
                                           marginTop: "2px",
-                                          fontSize: "8px",
-                                          color: "#5eead4",
+                                          fontSize: "16px",
+                                          color: "#00DCE6",
                                           whiteSpace: "nowrap",
                                         }}
                                       >
@@ -5594,8 +6738,8 @@ function App() {
                                       <span
                                         style={{
                                           marginTop: "3px",
-                                          fontSize: "7px",
-                                          color: "#60a5fa",
+                                          fontSize: "16px",
+                                          color: "#49D6A0",
                                         }}
                                       >
                                         Inspect transaction
@@ -5612,9 +6756,9 @@ function App() {
                               style={{
                                 marginTop: "9px",
                                 padding: "8px",
-                                border: "1px solid #334155",
+                                border: "1px solid #174047",
                                 borderRadius: "6px",
-                                background: "#111827",
+                                background: "#061116",
                               }}
                             >
                               <div style={{ ...sectionTitleStyle, fontSize: "10px" }}>Value per Hop</div>
@@ -5624,13 +6768,13 @@ function App() {
                                     key={`${hop.from_transaction}-${hop.to_transaction}-${hopIndex}`}
                                     style={{
                                       padding: "7px",
-                                      border: "1px solid #273449",
+                                      border: "1px solid #274D50",
                                       borderRadius: "5px",
                                     }}
                                   >
                                     <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "9px" }}>
                                       <strong>Hop {hopIndex + 1} → {hopIndex + 2}</strong>
-                                      <span style={{ color: hop.value_reduction ? "#4ade80" : "#facc15" }}>
+                                      <span style={{ color: hop.value_reduction ? "#00F7FF" : "#2DEAF2" }}>
                                         {hop.value_reduction ? "Reduced" : "No reduction"}
                                       </span>
                                     </div>
@@ -5655,7 +6799,7 @@ function App() {
                                         <strong>{formatNumber(hop.retained_amount)}</strong>
                                       </div>
                                     </div>
-                                    <div style={{ marginTop: "5px", fontSize: "9px", color: "#94a3b8" }}>
+                                    <div style={{ marginTop: "5px", fontSize: "9px", color: "#B8D4D7" }}>
                                       Forward ratio: {
                                         hop.forward_ratio === null || hop.forward_ratio === undefined
                                           ? "—"
@@ -5703,7 +6847,7 @@ function App() {
                             </div>
                             <div style={miniStatStyle}>
                               <span>Same Asset</span>
-                              <strong style={{ color: candidate.same_asset ? "#4ade80" : "#f87171" }}>
+                              <strong style={{ color: candidate.same_asset ? "#00F7FF" : "#FF817F" }}>
                                 {candidate.same_asset ? "Yes" : "No"}
                               </strong>
                             </div>
@@ -5717,7 +6861,7 @@ function App() {
                                   key={`${index}-${evidenceIndex}`}
                                   style={{
                                     fontSize: "9px",
-                                    color: "#cbd5e1",
+                                    color: "#D8EAEC",
                                     lineHeight: 1.5,
                                   }}
                                 >
@@ -5736,11 +6880,11 @@ function App() {
                         style={{
                           marginTop: "10px",
                           padding: "10px",
-                          background: "#0f1117",
-                          border: "1px solid #3b4254",
+                          background: "#02090C",
+                          border: "1px solid #174047",
                           borderRadius: "6px",
                           fontSize: "11px",
-                          color: "#94a3b8",
+                          color: "#B8D4D7",
                         }}
                       >
                         No validated peel-chain candidates were found in the stored graph data.
@@ -5751,13 +6895,15 @@ function App() {
                       style={{
                         marginTop: "10px",
                         fontSize: "9px",
-                        color: "#64748b",
+                        color: "#8EADB1",
                         lineHeight: 1.5,
                       }}
                     >
                       {peelChain.notice}
                     </div>
                   </div>
+                )}
+                  </>
                 )}
               </div>
 
@@ -5767,7 +6913,7 @@ function App() {
                 style={{
                   marginTop: "14px",
                   paddingTop: "14px",
-                  borderTop: "1px solid #2f3545",
+                  borderTop: "1px solid #12252A",
                 }}
               >
                 <div
@@ -5778,37 +6924,59 @@ function App() {
                     gap: "8px",
                   }}
                 >
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: "15px" }}>
+                  <div style={{ minWidth: 0, textAlign: "left" }}>
+                    <h3
+                      style={{
+                        margin: 0,
+                        fontSize: "15px",
+                        fontWeight: 700,
+                        lineHeight: 1.25,
+                        letterSpacing: "0.02em",
+                        textAlign: "left",
+                      }}
+                    >
                       Cross-Chain Analysis
                     </h3>
                     <div
                       style={{
                         marginTop: "4px",
-                        fontSize: "10px",
-                        color: "#94a3b8",
+                        fontSize: "9px",
+                        color: "#8EADB1",
                       }}
                     >
-                      Research candidates from existing Neo4j data
+                      Detect candidate links across supported chains.
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    aria-expanded={crossChainExpanded}
+                    onClick={() => setCrossChainExpanded((current) => !current)}
+                    style={{
+                      width: "30px",
+                      height: "30px",
+                      padding: 0,
+                      borderRadius: "8px",
+                      border: "1px solid #174047",
+                      background: crossChainExpanded ? "#13272C" : "#061116",
+                      color: crossChainExpanded ? "#65F9FF" : "#A9C5C8",
+                      cursor: "pointer",
+                      fontSize: "16px",
+                      lineHeight: 1,
+                    }}
+                  >
+                    {crossChainExpanded ? "−" : "+"}
+                  </button>
                 </div>
 
-                <div
-                  style={{
-                    marginTop: "10px",
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: "8px",
-                  }}
-                >
+                {crossChainExpanded && (
+                  <>
                   <label
                     style={{
                       display: "flex",
                       flexDirection: "column",
                       gap: "4px",
                       fontSize: "9px",
-                      color: "#94a3b8",
+                      color: "#B8D4D7",
                     }}
                   >
                     Target Chain
@@ -5820,9 +6988,9 @@ function App() {
                       style={{
                         padding: "7px",
                         borderRadius: "5px",
-                        border: "1px solid #334155",
-                        background: "#111827",
-                        color: "#e2e8f0",
+                        border: "1px solid #174047",
+                        background: "#061116",
+                        color: "#EAF7F8",
                         fontSize: "10px",
                       }}
                     >
@@ -5842,7 +7010,7 @@ function App() {
                       flexDirection: "column",
                       gap: "4px",
                       fontSize: "9px",
-                      color: "#94a3b8",
+                      color: "#B8D4D7",
                     }}
                   >
                     Time Window (min)
@@ -5857,14 +7025,13 @@ function App() {
                       style={{
                         padding: "7px",
                         borderRadius: "5px",
-                        border: "1px solid #334155",
-                        background: "#111827",
-                        color: "#e2e8f0",
+                        border: "1px solid #174047",
+                        background: "#061116",
+                        color: "#EAF7F8",
                         fontSize: "10px",
                       }}
                     />
                   </label>
-                </div>
 
                 <label
                   style={{
@@ -5873,7 +7040,7 @@ function App() {
                     gap: "4px",
                     marginTop: "8px",
                     fontSize: "9px",
-                    color: "#94a3b8",
+                    color: "#B8D4D7",
                   }}
                 >
                   Value Tolerance (%)
@@ -5888,9 +7055,9 @@ function App() {
                     style={{
                       padding: "7px",
                       borderRadius: "5px",
-                      border: "1px solid #334155",
-                      background: "#111827",
-                      color: "#e2e8f0",
+                      border: "1px solid #174047",
+                      background: "#061116",
+                      color: "#EAF7F8",
                       fontSize: "10px",
                     }}
                   />
@@ -5905,10 +7072,10 @@ function App() {
                     marginTop: "9px",
                     padding: "8px",
                     borderRadius: "5px",
-                    border: "1px solid #2563eb",
-                    background: crossChainLoading ? "#1e293b" : "#172554",
-                    color: "#93c5fd",
-                    fontSize: "10px",
+                    border: "1px solid #00F7FF",
+                    background: crossChainLoading ? "#102126" : "#13272C",
+                    color: "#65F9FF",
+                    fontSize: "16px",
                     fontWeight: 700,
                     cursor: crossChainLoading ? "not-allowed" : "pointer",
                   }}
@@ -5923,9 +7090,9 @@ function App() {
                     style={{
                       marginTop: "10px",
                       padding: "8px",
-                      border: "1px solid #334155",
+                      border: "1px solid #174047",
                       borderRadius: "6px",
-                      background: "#0f172a",
+                      background: "#02090C",
                     }}
                   >
                     <div
@@ -5936,28 +7103,28 @@ function App() {
                       }}
                     >
                       <div>
-                        <div style={{ fontSize: "8px", color: "#64748b" }}>
+                        <div style={{ fontSize: "8px", color: "#8EADB1" }}>
                           STATUS
                         </div>
-                        <strong style={{ fontSize: "9px", color: "#93c5fd" }}>
+                        <strong style={{ fontSize: "9px", color: "#65F9FF" }}>
                           {crossChain.status}
                         </strong>
                       </div>
 
                       <div>
-                        <div style={{ fontSize: "8px", color: "#64748b" }}>
+                        <div style={{ fontSize: "8px", color: "#8EADB1" }}>
                           CANDIDATES
                         </div>
-                        <strong style={{ fontSize: "9px", color: "#e2e8f0" }}>
+                        <strong style={{ fontSize: "9px", color: "#EAF7F8" }}>
                           {crossChain.candidate_count}
                         </strong>
                       </div>
 
                       <div>
-                        <div style={{ fontSize: "8px", color: "#64748b" }}>
+                        <div style={{ fontSize: "8px", color: "#8EADB1" }}>
                           SOURCE
                         </div>
-                        <strong style={{ fontSize: "9px", color: "#e2e8f0" }}>
+                        <strong style={{ fontSize: "9px", color: "#EAF7F8" }}>
                           {crossChain.source_chain}
                         </strong>
                       </div>
@@ -5967,7 +7134,7 @@ function App() {
                       style={{
                         marginTop: "7px",
                         fontSize: "8px",
-                        color: "#94a3b8",
+                        color: "#B8D4D7",
                       }}
                     >
                       Window: {crossChain.time_window_minutes} min · Tolerance:{" "}
@@ -5982,8 +7149,8 @@ function App() {
                     style={{
                       marginTop: "9px",
                       padding: "9px",
-                      background: "#0f1117",
-                      border: "1px solid #3b4254",
+                      background: "#02090C",
+                      border: "1px solid #174047",
                       borderRadius: "7px",
                     }}
                   >
@@ -6004,8 +7171,8 @@ function App() {
                           fontSize: "8px",
                           padding: "3px 6px",
                           borderRadius: "999px",
-                          background: "#172554",
-                          color: "#93c5fd",
+                          background: "#13272C",
+                          color: "#65F9FF",
                         }}
                       >
                         {(candidate.confidence * 100).toFixed(0)}% signal
@@ -6016,7 +7183,7 @@ function App() {
                       style={{
                         marginTop: "7px",
                         fontSize: "8px",
-                        color: "#94a3b8",
+                        color: "#B8D4D7",
                       }}
                     >
                       {candidate.source.chain ?? "Unknown"} →{" "}
@@ -6040,8 +7207,8 @@ function App() {
                           style={{
                             padding: "3px 5px",
                             borderRadius: "999px",
-                            background: "#1e293b",
-                            color: "#cbd5e1",
+                            background: "#102126",
+                            color: "#D8EAEC",
                             fontSize: "7px",
                           }}
                         >
@@ -6069,10 +7236,10 @@ function App() {
                         style={{
                           padding: "6px",
                           borderRadius: "5px",
-                          border: "1px solid #334155",
-                          background: "#111827",
-                          color: "#93c5fd",
-                          fontSize: "8px",
+                          border: "1px solid #174047",
+                          background: "#061116",
+                          color: "#65F9FF",
+                          fontSize: "16px",
                           cursor: "pointer",
                         }}
                       >
@@ -6090,10 +7257,10 @@ function App() {
                         style={{
                           padding: "6px",
                           borderRadius: "5px",
-                          border: "1px solid #334155",
-                          background: "#111827",
-                          color: "#93c5fd",
-                          fontSize: "8px",
+                          border: "1px solid #174047",
+                          background: "#061116",
+                          color: "#65F9FF",
+                          fontSize: "16px",
                           cursor: "pointer",
                         }}
                       >
@@ -6108,16 +7275,18 @@ function App() {
                     style={{
                       marginTop: "9px",
                       padding: "7px 8px",
-                      border: "1px solid #334155",
+                      border: "1px solid #174047",
                       borderRadius: "6px",
-                      background: "#111827",
-                      color: "#94a3b8",
+                      background: "#061116",
+                      color: "#B8D4D7",
                       fontSize: "8px",
                       lineHeight: 1.5,
                     }}
                   >
                     {crossChain.notice}
                   </div>
+                )}
+                  </>
                 )}
               </div>
 
@@ -6131,9 +7300,14 @@ function App() {
                 disabled={
                   riskLoading
                 }
-                style={
-                  riskButtonStyle
-                }
+                style={{
+                  ...riskButtonStyle,
+                  marginTop: "10px",
+                  padding: "9px 10px",
+                  borderRadius: "9px",
+                  fontSize: "16px",
+                  letterSpacing: "0.02em",
+                }}
               >
                 {riskLoading
                   ? "Analyzing Risk..."
@@ -6164,19 +7338,19 @@ function App() {
             position:
               "absolute",
             zIndex: 40,
-            top: "86px",
-            right: "20px",
-            width: "360px",
+            top: "78px",
+            right: "16px",
+            width: "390px",
             maxHeight:
-              "calc(100vh - 106px)",
+              "calc(100vh - 94px)",
             overflowY:
               "auto",
             background:
-              "#171a23",
+              "rgba(17, 21, 31, 0.99)",
             border:
-              "1px solid #3b4254",
+              "1px solid #1C3438",
             borderRadius:
-              "10px",
+              "14px",
             padding:
               "18px",
             boxSizing:
@@ -6213,11 +7387,11 @@ function App() {
               }
               style={{
                 background:
-                  "#272d3a",
+                  "#0B1D22",
                 color:
-                  "#ffffff",
+                  "#F3FAFA",
                 border:
-                  "1px solid #475569",
+                  "1px solid #34545A",
                 borderRadius:
                   "5px",
                 padding:
@@ -6231,134 +7405,179 @@ function App() {
           </div>
 
           {selectedWallet && (
-            <div
-              style={{
-                ...investigationTabsStyle,
-                gridTemplateColumns: selectedTransfer
-                  ? "repeat(7, minmax(0, 1fr))"
-                  : "repeat(6, minmax(0, 1fr))",
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setInvestigationTab("wallet")}
-                style={investigationTabStyle(investigationTab === "wallet")}
-              >
-                Wallet
-              </button>
+            <>
+              {investigationMenuOpen ? (
+                <div style={investigationMenuStyle}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("wallet");
+                      setInvestigationMenuOpen(false);
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>Wallet</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
 
-              {selectedTransfer && (
-                <button
-                  type="button"
-                  onClick={() => setInvestigationTab("transaction")}
-                  style={investigationTabStyle(investigationTab === "transaction")}
-                >
-                  Transaction
-                </button>
+                  {selectedTransfer && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvestigationTab("transaction");
+                        setInvestigationMenuOpen(false);
+                      }}
+                      style={investigationMenuButtonStyle}
+                    >
+                      <span>Transaction</span>
+                      <span style={investigationMenuArrowStyle}>›</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("analytics");
+                      setInvestigationMenuOpen(false);
+                      if (!graphAnalytics || !timelineAnalytics) {
+                        void handleLoadWalletAnalytics();
+                      }
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>Analytics</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("ml-aml");
+                      setInvestigationMenuOpen(false);
+                      if (!mlRisk || !amlAssessment) {
+                        void handleLoadMlAml();
+                      }
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>ML / AML</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("vasp");
+                      setInvestigationMenuOpen(false);
+                      if (!vaspAttribution) {
+                        void handleLoadVaspAttribution();
+                      }
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>VASP Attribution</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("intelligence");
+                      setInvestigationMenuOpen(false);
+                      if (!intelligenceLoading) {
+                        void handleLoadRiskEntities();
+                      }
+                      if (!newRiskEntityAddress && selectedWallet) {
+                        resetRiskEntityForm();
+                      }
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>Intelligence</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("candidate-linking");
+                      setInvestigationMenuOpen(false);
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>Candidate Linking</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("notes");
+                      setInvestigationMenuOpen(false);
+                      if (selectedCase && notes.length === 0 && !notesLoading) {
+                        void loadNotes(selectedCase.id);
+                      }
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>Notes</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvestigationTab("evidence");
+                      setInvestigationMenuOpen(false);
+                      if (selectedCase && !evidenceLoading) {
+                        void loadEvidence(selectedCase.id);
+                      }
+                    }}
+                    style={investigationMenuButtonStyle}
+                  >
+                    <span>Evidence</span>
+                    <span style={investigationMenuArrowStyle}>›</span>
+                  </button>
+                </div>
+              ) : (
+                <div style={investigationBackBarStyle}>
+                  <button
+                    type="button"
+                    aria-label="Back to investigation sections"
+                    onClick={() => setInvestigationMenuOpen(true)}
+                    style={investigationBackButtonStyle}
+                  >
+                    ←
+                  </button>
+                  <div style={investigationBackTitleStyle}>
+                    {
+                      {
+                        wallet: "Wallet",
+                        transaction: "Transaction",
+                        analytics: "Analytics",
+                        "ml-aml": "ML / AML",
+                        vasp: "VASP Attribution",
+                        intelligence: "Intelligence",
+                        "candidate-linking": "Candidate Linking",
+                        notes: "Notes",
+                        evidence: "Evidence",
+                      }[investigationTab]
+                    }
+                  </div>
+                </div>
               )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInvestigationTab("analytics");
-                  if (!graphAnalytics || !timelineAnalytics) {
-                    void handleLoadWalletAnalytics();
-                  }
-                }}
-                style={investigationTabStyle(investigationTab === "analytics")}
-              >
-                Analytics
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInvestigationTab("ml-aml");
-                  if (!mlRisk || !amlAssessment) {
-                    void handleLoadMlAml();
-                  }
-                }}
-                style={investigationTabStyle(investigationTab === "ml-aml")}
-              >
-                ML / AML
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInvestigationTab("vasp");
-                  if (!vaspAttribution) {
-                    void handleLoadVaspAttribution();
-                  }
-                }}
-                style={investigationTabStyle(investigationTab === "vasp")}
-              >
-                VASP Attribution
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInvestigationTab("intelligence");
-                  if (!intelligenceLoading) {
-                    void handleLoadRiskEntities();
-                  }
-                  if (!newRiskEntityAddress && selectedWallet) {
-                    resetRiskEntityForm();
-                  }
-                }}
-                style={investigationTabStyle(investigationTab === "intelligence")}
-              >
-                Intelligence
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInvestigationTab("candidate-linking");
-                }}
-                style={investigationTabStyle(
-                  investigationTab === "candidate-linking",
-                )}
-              >
-                Candidate Linking
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInvestigationTab("notes");
-                  if (selectedCase && notes.length === 0 && !notesLoading) {
-                    void loadNotes(selectedCase.id);
-                  }
-                }}
-                style={investigationTabStyle(investigationTab === "notes")}
-              >
-                Notes
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setInvestigationTab("evidence");
-                  if (selectedCase && !evidenceLoading) {
-                    void loadEvidence(selectedCase.id);
-                  }
-                }}
-                style={investigationTabStyle(investigationTab === "evidence")}
-              >
-                Evidence
-              </button>
-            </div>
+            </>
           )}
+
+
 
           {/* VASP ATTRIBUTION */}
 
-          {selectedWallet && investigationTab === "vasp" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "vasp" && (
             <>
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>VASP Attribution</div>
-                <div style={{ marginTop: "7px", fontSize: "10px", color: "#94a3b8", lineHeight: 1.5 }}>
+                <div style={{ marginTop: "7px", fontSize: "10px", color: "#B8D4D7", lineHeight: 1.5 }}>
                   Known-VASP intelligence matching across transaction-connected wallets. This is a research-stage intelligence assessment.
                 </div>
                 {!selectedWalletId ? (
@@ -6391,7 +7610,7 @@ function App() {
                       <div style={analyticsStatStyle}><span>Chain</span><strong>{vaspAttribution.chain}</strong></div>
                       <div style={analyticsStatStyle}><span>Candidates</span><strong>{vaspAttribution.candidate_count}</strong></div>
                     </div>
-                    <div style={{ marginTop: "10px", color: "#64748b", fontSize: "9px", lineHeight: 1.5 }}>
+                    <div style={{ marginTop: "10px", color: "#8EADB1", fontSize: "9px", lineHeight: 1.5 }}>
                       {vaspAttribution.method}
                     </div>
                   </div>
@@ -6404,9 +7623,9 @@ function App() {
                         <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "flex-start" }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={sectionTitleStyle}>{candidate.name ?? "Known VASP"}</div>
-                            <div style={{ marginTop: "5px", color: "#94a3b8", fontSize: "9px", wordBreak: "break-all" }}>{candidate.address}</div>
+                            <div style={{ marginTop: "5px", color: "#B8D4D7", fontSize: "9px", wordBreak: "break-all" }}>{candidate.address}</div>
                           </div>
-                          <span style={{ ...analyticsSeverityStyle, color: "#86efac", flexShrink: 0 }}>
+                          <span style={{ ...analyticsSeverityStyle, color: "#58F7FF", flexShrink: 0 }}>
                             {candidate.confidence !== null ? `${(candidate.confidence * 100).toFixed(1)}%` : "N/A"}
                           </span>
                         </div>
@@ -6416,21 +7635,21 @@ function App() {
                           <div style={analyticsStatStyle}><span>Source</span><strong>{candidate.source ?? "N/A"}</strong></div>
                           <div style={analyticsStatStyle}><span>Category</span><strong>{candidate.risk_category ?? "N/A"}</strong></div>
                         </div>
-                        <div style={{ marginTop: "9px", color: "#cbd5e1", fontSize: "10px", lineHeight: 1.5 }}>
+                        <div style={{ marginTop: "9px", color: "#D8EAEC", fontSize: "10px", lineHeight: 1.5 }}>
                           <strong>Reason:</strong> {candidate.reason}
                         </div>
                         {candidate.evidence && (
-                          <div style={{ marginTop: "8px", color: "#94a3b8", fontSize: "10px", lineHeight: 1.5 }}>
-                            <strong style={{ color: "#cbd5e1" }}>Evidence:</strong> {candidate.evidence}
+                          <div style={{ marginTop: "8px", color: "#B8D4D7", fontSize: "10px", lineHeight: 1.5 }}>
+                            <strong style={{ color: "#D8EAEC" }}>Evidence:</strong> {candidate.evidence}
                           </div>
                         )}
-                        <details style={{ marginTop: "9px", color: "#94a3b8" }}>
-                          <summary style={{ cursor: "pointer", color: "#60a5fa", fontSize: "10px" }}>Transaction Path Evidence</summary>
-                          <div style={{ marginTop: "8px", fontSize: "9px", color: "#cbd5e1", lineHeight: 1.5 }}>
+                        <details style={{ marginTop: "9px", color: "#B8D4D7" }}>
+                          <summary style={{ cursor: "pointer", color: "#49D6A0", fontSize: "10px" }}>Transaction Path Evidence</summary>
+                          <div style={{ marginTop: "8px", fontSize: "9px", color: "#D8EAEC", lineHeight: 1.5 }}>
                             <div><strong>Wallet path:</strong></div>
                             <div style={{ marginTop: "4px", wordBreak: "break-all" }}>{candidate.wallets.join(" → ")}</div>
                             {candidate.transfers.map((transfer, transferIndex) => (
-                              <div key={`${transfer.transaction_hash}-${transferIndex}`} style={{ marginTop: "8px", padding: "8px", background: "#0f1117", border: "1px solid #2f3545", borderRadius: "6px" }}>
+                              <div key={`${transfer.transaction_hash}-${transferIndex}`} style={{ marginTop: "8px", padding: "8px", background: "#02090C", border: "1px solid #12252A", borderRadius: "6px" }}>
                                 <div><strong>Transaction:</strong> <span style={{ wordBreak: "break-all" }}>{transfer.transaction_hash}</span></div>
                                 <div style={{ marginTop: "4px" }}><strong>Asset:</strong> {transfer.asset ?? "N/A"} · <strong>Value:</strong> {transfer.value ?? "N/A"}</div>
                                 <div style={{ marginTop: "4px" }}><strong>Category:</strong> {transfer.category ?? "N/A"} · <strong>Block:</strong> {transfer.block_number ?? "N/A"}</div>
@@ -6448,7 +7667,7 @@ function App() {
 
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>Add Known VASP Label</div>
-                <div style={{ marginTop: "6px", color: "#64748b", fontSize: "9px", lineHeight: 1.45 }}>
+                <div style={{ marginTop: "6px", color: "#8EADB1", fontSize: "9px", lineHeight: 1.45 }}>
                   Adds a known-VASP intelligence record to the selected wallet address. Use a documented intelligence source.
                 </div>
                 <form onSubmit={handleAddKnownVaspLabel} style={{ marginTop: "10px" }}>
@@ -6466,7 +7685,7 @@ function App() {
 
           {/* INTELLIGENCE REGISTRY */}
 
-          {selectedWallet && investigationTab === "intelligence" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "intelligence" && (
             <>
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>Risk Entity Intelligence</div>
@@ -6474,7 +7693,7 @@ function App() {
                   style={{
                     marginTop: "7px",
                     fontSize: "10px",
-                    color: "#94a3b8",
+                    color: "#B8D4D7",
                     lineHeight: 1.5,
                   }}
                 >
@@ -6629,7 +7848,7 @@ function App() {
                             <>
                               <div
                                 style={{
-                                  color: "#cbd5e1",
+                                  color: "#D8EAEC",
                                   fontSize: "9px",
                                   wordBreak: "break-all",
                                 }}
@@ -6639,7 +7858,7 @@ function App() {
                               <div
                                 style={{
                                   marginTop: "3px",
-                                  color: "#64748b",
+                                  color: "#8EADB1",
                                   fontSize: "9px",
                                 }}
                               >
@@ -6758,7 +7977,7 @@ function App() {
                                   <div
                                     style={{
                                       marginTop: "4px",
-                                      color: "#94a3b8",
+                                      color: "#B8D4D7",
                                       fontSize: "9px",
                                       wordBreak: "break-all",
                                     }}
@@ -6811,12 +8030,12 @@ function App() {
                                 <div
                                   style={{
                                     marginTop: "8px",
-                                    color: "#94a3b8",
+                                    color: "#B8D4D7",
                                     fontSize: "9px",
                                     lineHeight: 1.5,
                                   }}
                                 >
-                                  <strong style={{ color: "#cbd5e1" }}>
+                                  <strong style={{ color: "#D8EAEC" }}>
                                     Evidence:
                                   </strong>{" "}
                                   {entity.evidence}
@@ -6827,7 +8046,7 @@ function App() {
                                 <div
                                   style={{
                                     marginTop: "5px",
-                                    color: "#64748b",
+                                    color: "#8EADB1",
                                     fontSize: "8px",
                                   }}
                                 >
@@ -6858,8 +8077,8 @@ function App() {
                                   disabled={riskEntitySaving}
                                   style={{
                                     ...secondaryButtonStyle,
-                                    borderColor: "#7f1d1d",
-                                    color: "#fca5a5",
+                                    borderColor: "#6A292D",
+                                    color: "#E6A3A0",
                                   }}
                                 >
                                   Delete
@@ -6879,7 +8098,7 @@ function App() {
                 <div
                   style={{
                     marginTop: "6px",
-                    color: "#64748b",
+                    color: "#8EADB1",
                     fontSize: "9px",
                     lineHeight: 1.45,
                   }}
@@ -7008,7 +8227,7 @@ function App() {
 
           {/* CANDIDATE LINKING */}
 
-          {selectedWallet && investigationTab === "candidate-linking" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "candidate-linking" && (
             <>
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>Candidate Linking</div>
@@ -7016,7 +8235,7 @@ function App() {
                   style={{
                     marginTop: "7px",
                     fontSize: "10px",
-                    color: "#94a3b8",
+                    color: "#B8D4D7",
                     lineHeight: 1.5,
                   }}
                 >
@@ -7052,10 +8271,10 @@ function App() {
                   <div
                     style={{
                       padding: "8px",
-                      border: "1px solid #334155",
+                      border: "1px solid #174047",
                       borderRadius: "6px",
-                      background: "#111827",
-                      color: "#94a3b8",
+                      background: "#061116",
+                      color: "#B8D4D7",
                       fontSize: "8px",
                       lineHeight: 1.5,
                       alignSelf: "end",
@@ -7135,7 +8354,7 @@ function App() {
                     <div
                       style={{
                         marginTop: "10px",
-                        color: "#64748b",
+                        color: "#8EADB1",
                         fontSize: "9px",
                         lineHeight: 1.5,
                       }}
@@ -7170,7 +8389,7 @@ function App() {
                             <div
                               style={{
                                 marginTop: "5px",
-                                color: "#94a3b8",
+                                color: "#B8D4D7",
                                 fontSize: "9px",
                                 wordBreak: "break-all",
                               }}
@@ -7182,7 +8401,7 @@ function App() {
                           <span
                             style={{
                               ...analyticsSeverityStyle,
-                              color: "#86efac",
+                              color: "#58F7FF",
                               flexShrink: 0,
                             }}
                           >
@@ -7222,12 +8441,12 @@ function App() {
                           <div
                             style={{
                               marginTop: "7px",
-                              color: "#94a3b8",
+                              color: "#B8D4D7",
                               fontSize: "9px",
                             }}
                           >
                             Risk category:{" "}
-                            <strong style={{ color: "#cbd5e1" }}>
+                            <strong style={{ color: "#D8EAEC" }}>
                               {candidate.risk_category}
                             </strong>
                           </div>
@@ -7237,7 +8456,7 @@ function App() {
                           <div
                             style={{
                               marginTop: "9px",
-                              color: "#cbd5e1",
+                              color: "#D8EAEC",
                               fontSize: "10px",
                               lineHeight: 1.5,
                             }}
@@ -7261,8 +8480,8 @@ function App() {
                                 style={{
                                   padding: "3px 5px",
                                   borderRadius: "999px",
-                                  background: "#1e293b",
-                                  color: "#cbd5e1",
+                                  background: "#102126",
+                                  color: "#D8EAEC",
                                   fontSize: "7px",
                                 }}
                               >
@@ -7276,12 +8495,12 @@ function App() {
                           <div
                             style={{
                               marginTop: "8px",
-                              color: "#94a3b8",
+                              color: "#B8D4D7",
                               fontSize: "10px",
                               lineHeight: 1.5,
                             }}
                           >
-                            <strong style={{ color: "#cbd5e1" }}>
+                            <strong style={{ color: "#D8EAEC" }}>
                               Evidence:
                             </strong>{" "}
                             {candidate.evidence}
@@ -7291,13 +8510,13 @@ function App() {
                         <details
                           style={{
                             marginTop: "9px",
-                            color: "#94a3b8",
+                            color: "#B8D4D7",
                           }}
                         >
                           <summary
                             style={{
                               cursor: "pointer",
-                              color: "#60a5fa",
+                              color: "#49D6A0",
                               fontSize: "10px",
                             }}
                           >
@@ -7308,7 +8527,7 @@ function App() {
                             style={{
                               marginTop: "8px",
                               fontSize: "9px",
-                              color: "#cbd5e1",
+                              color: "#D8EAEC",
                               lineHeight: 1.5,
                             }}
                           >
@@ -7335,8 +8554,8 @@ function App() {
                                   style={{
                                     marginTop: "8px",
                                     padding: "8px",
-                                    background: "#0f1117",
-                                    border: "1px solid #2f3545",
+                                    background: "#02090C",
+                                    border: "1px solid #12252A",
                                     borderRadius: "6px",
                                   }}
                                 >
@@ -7381,11 +8600,11 @@ function App() {
 
           {/* CASE NOTES */}
 
-          {selectedWallet && investigationTab === "notes" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "notes" && (
             <>
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>Analyst Notes</div>
-                <div style={{ marginTop: "6px", color: "#64748b", fontSize: "9px", lineHeight: 1.45 }}>
+                <div style={{ marginTop: "6px", color: "#8EADB1", fontSize: "9px", lineHeight: 1.45 }}>
                   Notes are stored against the selected investigation case and are included in generated reports.
                 </div>
 
@@ -7451,7 +8670,7 @@ function App() {
                         </>
                       ) : (
                         <>
-                          <div style={{ color: "#e2e8f0", fontSize: "11px", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                          <div style={{ color: "#EAF7F8", fontSize: "11px", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                             {note.content}
                           </div>
                           <div style={noteMetaStyle}>
@@ -7481,7 +8700,7 @@ function App() {
 
           {/* WALLET DETAILS */}
 
-          {selectedWallet && investigationTab === "wallet" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "wallet" && (
             <>
               <div
                 style={
@@ -7503,9 +8722,9 @@ function App() {
                     padding:
                       "10px",
                     background:
-                      "#0f1117",
+                      "#02090C",
                     border:
-                      "1px solid #3b4254",
+                      "1px solid #174047",
                     borderRadius:
                       "6px",
                     wordBreak:
@@ -7576,6 +8795,53 @@ function App() {
                 </div>
               </div>
 
+              <div
+                style={{
+                  marginTop: "12px",
+                  display: "flex",
+                  gap: "8px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHighlightPathEnabled((current) => !current);
+                  }}
+                  disabled={
+                    selectedWallet.toLowerCase() ===
+                    address.toLowerCase()
+                  }
+                  style={{
+                    flex: 1,
+                    border: highlightPathEnabled
+                      ? "1px solid #00F7FF"
+                      : "1px solid #34545A",
+                    borderRadius: "6px",
+                    padding: "9px 10px",
+                    background: highlightPathEnabled
+                      ? "#04181B"
+                      : "#0B1D22",
+                    color: highlightPathEnabled
+                      ? "#F3FAFA"
+                      : "#D8EAEC",
+                    cursor:
+                      selectedWallet.toLowerCase() ===
+                      address.toLowerCase()
+                        ? "not-allowed"
+                        : "pointer",
+                    fontSize: "16px",
+                    fontWeight: 700,
+                    boxShadow: highlightPathEnabled
+                      ? "0 0 12px rgba(217,154,43,0.18)"
+                      : "none",
+                  }}
+                >
+                  {highlightPathEnabled
+                    ? "Clear Path Highlight"
+                    : "Highlight Path"}
+                </button>
+              </div>
+
               {/* RELATED TRANSFERS */}
 
               <div
@@ -7599,7 +8865,7 @@ function App() {
                       fontSize:
                         "12px",
                       color:
-                        "#94a3b8",
+                        "#A9C5C8",
                     }}
                   >
                     No transfer
@@ -7624,9 +8890,9 @@ function App() {
                           padding:
                             "10px",
                           background:
-                            "#0f1117",
+                            "#02090C",
                           border:
-                            "1px solid #3b4254",
+                            "1px solid #174047",
                           borderRadius:
                             "6px",
                           fontSize:
@@ -7707,7 +8973,7 @@ function App() {
 
           {/* WALLET ANALYTICS */}
 
-          {selectedWallet && investigationTab === "analytics" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "analytics" && (
             <>
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>
@@ -7717,7 +8983,7 @@ function App() {
                   style={{
                     marginTop: "7px",
                     fontSize: "10px",
-                    color: "#94a3b8",
+                    color: "#B8D4D7",
                     lineHeight: 1.5,
                   }}
                 >
@@ -7729,10 +8995,10 @@ function App() {
                     style={{
                       marginTop: "10px",
                       padding: "10px",
-                      background: "#2a1f0b",
-                      border: "1px solid #92400e",
+                      background: "#10282C",
+                      border: "1px solid #12434A",
                       borderRadius: "6px",
-                      color: "#fcd34d",
+                      color: "#2DEAF2",
                       fontSize: "11px",
                       lineHeight: 1.5,
                     }}
@@ -7758,7 +9024,7 @@ function App() {
                 <div
                   style={{
                     padding: "14px",
-                    color: "#94a3b8",
+                    color: "#B8D4D7",
                     fontSize: "11px",
                     textAlign: "center",
                   }}
@@ -7803,7 +9069,7 @@ function App() {
                       graphAnalytics.top_outgoing_counterparties.slice(0, 5).map((item) => (
                         <div key={`out-${item.address}`} style={analyticsListItemStyle}>
                           <div style={{ wordBreak: "break-all" }}>{shortenAddress(item.address)}</div>
-                          <div style={{ color: "#94a3b8", marginTop: "3px" }}>
+                          <div style={{ color: "#B8D4D7", marginTop: "3px" }}>
                             {item.transaction_count} tx • {formatNumber(item.total_value)}
                           </div>
                         </div>
@@ -7821,7 +9087,7 @@ function App() {
                           <strong>{String(signal.signal ?? "Graph signal")}</strong>
                           {signal.severity && <span style={analyticsSeverityStyle}>{String(signal.severity)}</span>}
                           {signal.reason && (
-                            <div style={{ marginTop: "4px", color: "#cbd5e1", lineHeight: 1.45 }}>
+                            <div style={{ marginTop: "4px", color: "#D8EAEC", lineHeight: 1.45 }}>
                               {String(signal.reason)}
                             </div>
                           )}
@@ -7836,7 +9102,7 @@ function App() {
                       {graphAnalytics.multi_hop_risk_paths.slice(0, 5).map((path, index) => (
                         <div key={`path-${index}`} style={analyticsListItemStyle}>
                           <strong>{path.entity_name ?? path.entity_type}</strong>
-                          <div style={{ marginTop: "3px", color: "#94a3b8", wordBreak: "break-all" }}>
+                          <div style={{ marginTop: "3px", color: "#B8D4D7", wordBreak: "break-all" }}>
                             {shortenAddress(path.risk_entity_address)} • {path.hop_count} hop(s)
                           </div>
                         </div>
@@ -7885,7 +9151,7 @@ function App() {
                           <strong>{String(signal.signal ?? "Temporal signal")}</strong>
                           {signal.severity && <span style={analyticsSeverityStyle}>{String(signal.severity)}</span>}
                           {signal.reason && (
-                            <div style={{ marginTop: "4px", color: "#cbd5e1", lineHeight: 1.45 }}>
+                            <div style={{ marginTop: "4px", color: "#D8EAEC", lineHeight: 1.45 }}>
                               {String(signal.reason)}
                             </div>
                           )}
@@ -7905,10 +9171,10 @@ function App() {
                             <strong>{tx.direction}</strong>
                             <strong>{formatNumber(tx.value)}</strong>
                           </div>
-                          <div style={{ marginTop: "3px", color: "#94a3b8", wordBreak: "break-all" }}>
+                          <div style={{ marginTop: "3px", color: "#B8D4D7", wordBreak: "break-all" }}>
                             {shortenAddress(tx.counterparty)}
                           </div>
-                          <div style={{ marginTop: "3px", color: "#64748b" }}>
+                          <div style={{ marginTop: "3px", color: "#8EADB1" }}>
                             {tx.timestamp ?? "Unknown time"}
                           </div>
                         </div>
@@ -7922,10 +9188,10 @@ function App() {
                       {timelineAnalytics.bursts.slice(0, 5).map((burst, index) => (
                         <div key={`burst-${index}`} style={analyticsListItemStyle}>
                           <strong>{burst.transaction_count} transactions</strong>
-                          <div style={{ marginTop: "3px", color: "#94a3b8" }}>
+                          <div style={{ marginTop: "3px", color: "#B8D4D7" }}>
                             {burst.start_time} → {burst.end_time}
                           </div>
-                          <div style={{ marginTop: "3px", color: "#64748b" }}>
+                          <div style={{ marginTop: "3px", color: "#8EADB1" }}>
                             Duration: {formatSeconds(burst.duration_seconds)}
                           </div>
                         </div>
@@ -7939,11 +9205,11 @@ function App() {
 
           {/* CASE EVIDENCE */}
 
-          {selectedWallet && investigationTab === "evidence" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "evidence" && (
             <>
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>Case Evidence</div>
-                <div style={{ marginTop: "6px", color: "#64748b", fontSize: "9px", lineHeight: 1.45 }}>
+                <div style={{ marginTop: "6px", color: "#8EADB1", fontSize: "9px", lineHeight: 1.45 }}>
                   Record evidence references, source details, and investigation material against the selected case.
                 </div>
 
@@ -8021,7 +9287,7 @@ function App() {
                       <div
                         key={evidence.id}
                         style={{
-                          border: "1px solid #334155",
+                          border: "1px solid #174047",
                           borderRadius: "7px",
                           padding: "10px",
                           background: "rgba(15, 23, 42, 0.72)",
@@ -8084,7 +9350,7 @@ function App() {
                             <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "flex-start" }}>
                               <div style={{ minWidth: 0 }}>
                                 <div style={{ display: "flex", gap: "7px", alignItems: "center", flexWrap: "wrap" }}>
-                                  <strong style={{ color: "#f8fafc", fontSize: "12px", wordBreak: "break-word" }}>
+                                  <strong style={{ color: "#F3FAFA", fontSize: "12px", wordBreak: "break-word" }}>
                                     {evidence.title}
                                   </strong>
                                   <span style={analyticsSeverityStyle}>
@@ -8092,16 +9358,16 @@ function App() {
                                   </span>
                                 </div>
                                 {evidence.description && (
-                                  <div style={{ marginTop: "6px", color: "#cbd5e1", fontSize: "10px", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                  <div style={{ marginTop: "6px", color: "#D8EAEC", fontSize: "10px", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                                     {evidence.description}
                                   </div>
                                 )}
                                 {evidence.reference && (
-                                  <div style={{ marginTop: "7px", color: "#60a5fa", fontSize: "9px", lineHeight: 1.45, wordBreak: "break-all" }}>
+                                  <div style={{ marginTop: "7px", color: "#49D6A0", fontSize: "9px", lineHeight: 1.45, wordBreak: "break-all" }}>
                                     Reference: {evidence.reference}
                                   </div>
                                 )}
-                                <div style={{ marginTop: "7px", color: "#64748b", fontSize: "8px" }}>
+                                <div style={{ marginTop: "7px", color: "#8EADB1", fontSize: "8px" }}>
                                   Added {new Date(evidence.created_at).toLocaleString()}
                                   {evidence.updated_at !== evidence.created_at ? ` · Updated ${new Date(evidence.updated_at).toLocaleString()}` : ""}
                                 </div>
@@ -8120,7 +9386,7 @@ function App() {
                                   type="button"
                                   onClick={() => void handleDeleteEvidence(evidence.id)}
                                   disabled={evidenceSaving}
-                                  style={{ ...secondaryButtonStyle, color: "#fca5a5", borderColor: "#7f1d1d" }}
+                                  style={{ ...secondaryButtonStyle, color: "#E6A3A0", borderColor: "#6A292D" }}
                                 >
                                   Delete
                                 </button>
@@ -8138,11 +9404,11 @@ function App() {
 
           {/* ML / AML ASSESSMENT */}
 
-          {selectedWallet && investigationTab === "ml-aml" && (
+          {!investigationMenuOpen && selectedWallet && investigationTab === "ml-aml" && (
             <>
               <div style={panelSectionStyle}>
                 <div style={sectionTitleStyle}>ML Risk + AML Assessment</div>
-                <div style={{ marginTop: "7px", fontSize: "10px", color: "#94a3b8", lineHeight: 1.5 }}>
+                <div style={{ marginTop: "7px", fontSize: "10px", color: "#B8D4D7", lineHeight: 1.5 }}>
                   Research-stage machine-learning output and structured behavioral evidence for analyst review.
                 </div>
                 {!selectedWalletId ? (
@@ -8176,7 +9442,7 @@ function App() {
                     <div style={{ marginTop: "7px" }}>
                       {Object.entries(mlRisk.features).map(([name, value]) => (
                         <div key={name} style={featureRowStyle}>
-                          <span style={{ color: "#94a3b8", wordBreak: "break-word" }}>{name}</span>
+                          <span style={{ color: "#B8D4D7", wordBreak: "break-word" }}>{name}</span>
                           <strong style={{ textAlign: "right", wordBreak: "break-word" }}>{formatMlValue(value)}</strong>
                         </div>
                       ))}
@@ -8204,7 +9470,7 @@ function App() {
                           key={`aml-signal-${index}`}
                           style={{
                             ...amlIndicatorStyle,
-                            color: "#f8fafc",
+                            color: "#F3FAFA",
                             minHeight: "70px",
                           }}
                         >
@@ -8218,7 +9484,7 @@ function App() {
                           >
                             <strong
                               style={{
-                                color: "#f8fafc",
+                                color: "#F3FAFA",
                                 fontSize: "12px",
                                 wordBreak: "break-word",
                               }}
@@ -8229,7 +9495,7 @@ function App() {
                             <span
                               style={{
                                 ...analyticsSeverityStyle,
-                                color: "#fbbf24",
+                                color: "#2DEAF2",
                                 flexShrink: 0,
                               }}
                             >
@@ -8240,7 +9506,7 @@ function App() {
                           <div
                             style={{
                               marginTop: "4px",
-                              color: "#64748b",
+                              color: "#8EADB1",
                               fontSize: "9px",
                               textTransform: "uppercase",
                             }}
@@ -8251,7 +9517,7 @@ function App() {
                           <div
                             style={{
                               marginTop: "6px",
-                              color: "#cbd5e1",
+                              color: "#D8EAEC",
                               lineHeight: 1.45,
                               fontSize: "11px",
                             }}
@@ -8263,13 +9529,13 @@ function App() {
                             <details
                               style={{
                                 marginTop: "8px",
-                                color: "#94a3b8",
+                                color: "#B8D4D7",
                               }}
                             >
                               <summary
                                 style={{
                                   cursor: "pointer",
-                                  color: "#60a5fa",
+                                  color: "#49D6A0",
                                 }}
                               >
                                 Evidence
@@ -8301,7 +9567,7 @@ function App() {
 
           {/* TRANSACTION DETAILS */}
 
-          {selectedTransfer && investigationTab === "transaction" && (
+          {!investigationMenuOpen && selectedTransfer && investigationTab === "transaction" && (
             <>
               <div
                 style={
@@ -8323,9 +9589,9 @@ function App() {
                         fontSize: "8px",
                         padding: "3px 6px",
                         borderRadius: "999px",
-                        background: "#172554",
-                        color: "#93c5fd",
-                        border: "1px solid #1d4ed8",
+                        background: "#13272C",
+                        color: "#65F9FF",
+                        border: "1px solid #00DCE6",
                       }}
                     >
                       Peel Chain
@@ -8340,9 +9606,9 @@ function App() {
                     padding:
                       "10px",
                     background:
-                      "#0f1117",
+                      "#02090C",
                     border:
-                      "1px solid #3b4254",
+                      "1px solid #174047",
                     borderRadius:
                       "6px",
                     wordBreak:
@@ -8539,7 +9805,7 @@ function App() {
                     fontSize:
                       "11px",
                     color:
-                      "#cbd5e1",
+                      "#C9E0E3",
                   }}
                 >
                   {
@@ -8572,7 +9838,7 @@ function App() {
                     fontSize:
                       "10px",
                     color:
-                      "#94a3b8",
+                      "#A9C5C8",
                     wordBreak:
                       "break-all",
                   }}
@@ -8606,13 +9872,13 @@ function App() {
             padding:
               "12px 16px",
             background:
-              "#3f1720",
+              "#281316",
             border:
-              "1px solid #ef4444",
+              "1px solid #FF5E68",
             borderRadius:
               "8px",
             color:
-              "#fecaca",
+              "#FFC1BE",
             fontSize:
               "13px",
           }}
@@ -8625,13 +9891,50 @@ function App() {
           GRAPH
       ===================== */}
 
+      {token && sidebarCollapsed && (
+        <button
+          type="button"
+          onClick={() => {
+            setSidebarCollapsed(false);
+            window.setTimeout(() => {
+              reactFlowInstance?.fitView({ padding: 0.18 });
+            }, 120);
+          }}
+          title="Show case workspace"
+          aria-label="Show case workspace"
+          style={{
+            position: "absolute",
+            top: "80px",
+            left: "14px",
+            zIndex: 30,
+            display: "flex",
+            alignItems: "center",
+            gap: "7px",
+            height: "34px",
+            padding: "0 11px",
+            borderRadius: "8px",
+            border: "1px solid #34545A",
+            background: "rgba(15, 17, 19, 0.96)",
+            color: "#F3FAFA",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.32)",
+            cursor: "pointer",
+            fontSize: "16px",
+            fontWeight: 700,
+          }}
+        >
+          <span style={{ fontSize: "16px", lineHeight: 1 }}>☰</span>
+          Show Workspace
+        </button>
+      )}
+
       <div
         className="cg-graph"
         style={{
           width: "100%",
           height:
-            "calc(100vh - 70px)",
+            "calc(100vh - 64px)",
           position: "relative",
+          background: "#061116",
         }}
       >
         {token && trace && nodes.length > 0 && (
@@ -8641,12 +9944,12 @@ function App() {
               style={{
                 position: "absolute",
                 top: "16px",
-                left: "430px",
+                left: sidebarCollapsed ? "16px" : "430px",
                 zIndex: 10,
                 width: "270px",
                 padding: "12px",
-                background: "rgba(23, 26, 35, 0.96)",
-                border: "1px solid #2f3545",
+                background: "rgba(11, 29, 31, 0.96)",
+                border: "1px solid #12252A",
                 borderRadius: "8px",
                 boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
               }}
@@ -8681,10 +9984,10 @@ function App() {
                     onClick={clearGraphFilters}
                   style={{
                     background: "transparent",
-                    color: "#94a3b8",
+                    color: "#B8D4D7",
                     border: "none",
                     cursor: "pointer",
-                    fontSize: "10px",
+                    fontSize: "16px",
                   }}
                 >
                   Clear
@@ -8750,7 +10053,7 @@ function App() {
               <div
                 style={{
                   marginTop: "8px",
-                  color: "#94a3b8",
+                  color: "#B8D4D7",
                   fontSize: "10px",
                 }}
               >
@@ -8770,8 +10073,8 @@ function App() {
               display: "flex",
               gap: "8px",
               padding: "8px",
-              background: "rgba(23, 26, 35, 0.94)",
-              border: "1px solid #2f3545",
+              background: "rgba(11, 29, 31, 0.94)",
+              border: "1px solid #12252A",
               borderRadius: "8px",
               boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
             }}
@@ -8801,6 +10104,7 @@ function App() {
           </>
         )}
 
+        
         <ReactFlow
           nodes={graphNodes}
           edges={graphEdges}
@@ -8808,6 +10112,8 @@ function App() {
           onInit={setReactFlowInstance}
           minZoom={0.2}
           maxZoom={2}
+          panOnDrag={true}
+          selectionOnDrag={false}
           onNodesChange={
             handleNodesChange
           }
@@ -8821,13 +10127,26 @@ function App() {
             closeInvestigationPanel
           }
         >
-        <Background />
+        <Background
+          color="#12252A"
+          gap={18}
+          size={1}
+        />
 
         {token && (
           <>
-            <Controls />
+            <Controls
+              showInteractive={false}
+            />
 
             <MiniMap
+              style={{
+                background: "#02090C",
+                border: "1px solid #174047",
+                borderRadius: "10px",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.35)",
+              }}
+              nodeStrokeWidth={2}
               nodeColor={(node) => {
                 const label =
                   String(
@@ -8838,8 +10157,8 @@ function App() {
                 return label.startsWith(
                   "TARGET",
                 )
-                  ? "#ef4444"
-                  : "#64748b";
+                  ? "#FF5E68"
+                  : "#789BA0";
               }}
             />
           </>
@@ -8852,27 +10171,137 @@ function App() {
 
 
 const responsiveCss = `
+  /* DEEP TEAL VISUAL SYSTEM */
+  @keyframes cg-path-flow {
+    to { stroke-dashoffset: -28px; }
+  }
+
+  .cg-graph .react-flow__edge.cg-path-highlight .react-flow__edge-path {
+    stroke: #00F7FF !important;
+    stroke-width: 4px !important;
+    stroke-dasharray: 8 6 !important;
+    filter: drop-shadow(0 0 5px rgba(217,154,43,0.85));
+    animation: cg-path-flow 1.15s linear infinite;
+  }
+
+  .cg-graph .react-flow__edge.cg-path-dim,
+  .cg-graph .react-flow__edge.cg-path-dim * {
+    pointer-events: none !important;
+    cursor: default !important;
+  }
+
+  .cg-graph .react-flow__edge.cg-path-dim .react-flow__edge-path {
+    opacity: 0.14 !important;
+  }
+
+  .cg-graph .react-flow__edge.cg-path-highlight .react-flow__edge-text {
+    fill: #F3FAFA !important;
+  }
+
+  .cg-graph .react-flow__edge.cg-path-highlight .react-flow__edge-textbg {
+    fill: #04181B !important;
+    stroke: #00F7FF !important;
+  }
+
+  .cg-graph .react-flow__attribution { display: none !important; }
+  .cg-graph .react-flow__controls {
+    box-shadow: 0 10px 28px rgba(5, 24, 27, 0.18) !important;
+  }
+  .cg-graph .react-flow__controls-button {
+    width: 30px !important;
+    height: 30px !important;
+    background: #061116 !important;
+    color: #C9E0E3 !important;
+    border-color: #174047 !important;
+  }
+  .cg-graph .react-flow__controls-button:hover {
+    background: #08181D !important;
+    color: #EAF7F8 !important;
+  }
+  .cg-graph .react-flow__minimap {
+    background: #061116 !important;
+    border: 1px solid #174047 !important;
+    box-shadow: 0 10px 28px rgba(5, 24, 27, 0.18) !important;
+  }
+  .cg-graph .react-flow__minimap-mask {
+    fill: rgba(21, 154, 156, 0.10) !important;
+  }
+  .cg-graph .react-flow__node {
+    font-family: Arial, sans-serif;
+  }
+  .cg-graph .react-flow__edge-textbg {
+    fill: #061116 !important;
+  }
+  .cg-graph .react-flow__edge-text {
+    fill: #C9E0E3 !important;
+  }
+
+  /* =========================
+     DEEP TEAL THEME
+     Technical teal surfaces + restrained cyan-green accent.
+  ========================= */
+  :root {
+    color-scheme: dark;
+    --cg-bg: #02090C;
+    --cg-panel: #061116;
+    --cg-card: #08181D;
+    --cg-border: #12252A;
+    --cg-border-soft: #174047;
+    --cg-text: #EAF7F8;
+    --cg-muted: #A9C5C8;
+    --cg-accent: #00F7FF;
+    --cg-accent-hover: #35F9FF;
+    --cg-success: #49D6A0;
+    --cg-warning: #2DEAF2;
+    --cg-danger: #FF5E68;
+  }
+
+  .cg-graph .react-flow {
+    background: #061116 !important;
+  }
+
+  .cg-graph .react-flow__minimap {
+    background: #061116 !important;
+    border: 1px solid #12252A !important;
+  }
+
+  .cg-graph .react-flow__controls-button {
+    background: #061116 !important;
+    color: #C9E0E3 !important;
+    border-color: #174047 !important;
+  }
+
+  .cg-graph .react-flow__controls-button:hover {
+    background: #08181D !important;
+    color: #EAF7F8 !important;
+  }
+
+  .cg-sidebar,
+  .cg-investigation {
+    scrollbar-color: #174047 transparent;
+  }
+
   * { box-sizing: border-box; }
   html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
   button, input, select, textarea { font: inherit; }
 
   .cg-header {
-    height: 58px !important;
-    padding: 0 16px !important;
+    height: 64px !important;
+    padding: 0 20px !important;
   }
-  .cg-header h1 { font-size: 18px !important; }
+  .cg-header h1 { font-size: 20px !important; }
   .cg-header > div:first-child { min-width: 0; }
 
   .cg-sidebar {
-    top: 68px !important;
-    left: 12px !important;
-    width: 310px !important;
-    max-height: calc(100vh - 80px) !important;
-    padding: 12px !important;
-    border-radius: 12px !important;
+    top: 78px !important;
+    left: 16px !important;
+    width: 380px !important;
+    max-height: calc(100vh - 94px) !important;
+    padding: 14px !important;
+    border-radius: 16px !important;
     font-size: 11px !important;
   }
-  .cg-sidebar h3 { font-size: 14px !important; }
+  .cg-sidebar h3 { font-size: 15px !important; }
   .cg-sidebar input,
   .cg-sidebar select,
   .cg-sidebar textarea {
@@ -8889,12 +10318,12 @@ const responsiveCss = `
   }
 
   .cg-investigation {
-    top: 68px !important;
-    right: 12px !important;
-    width: 320px !important;
-    max-height: calc(100vh - 80px) !important;
-    padding: 12px !important;
-    border-radius: 12px !important;
+    top: 78px !important;
+    right: 16px !important;
+    width: 390px !important;
+    max-height: calc(100vh - 94px) !important;
+    padding: 16px !important;
+    border-radius: 14px !important;
   }
   .cg-investigation h3 { font-size: 15px !important; }
   .cg-investigation h4 { font-size: 12px !important; }
@@ -8911,26 +10340,143 @@ const responsiveCss = `
   .cg-graph-actions {
     top: 12px !important;
     right: 12px !important;
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: center !important;
     gap: 6px !important;
+    width: max-content !important;
+    max-width: none !important;
     padding: 6px !important;
-    max-width: 230px !important;
+    box-sizing: border-box !important;
   }
   .cg-graph-actions button {
-    padding: 6px 8px !important;
+    flex: 0 0 auto !important;
+    height: 32px !important;
+    padding: 0 10px !important;
     font-size: 10px !important;
     white-space: nowrap !important;
   }
 
   .cg-graph {
-    height: calc(100vh - 58px) !important;
+    height: calc(100vh - 64px) !important;
+  }
+
+  .cg-graph .react-flow__controls {
+    overflow: hidden;
+    border: 1px solid #174047;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+
+  .cg-graph .react-flow__controls-button {
+    width: 30px;
+    height: 30px;
+    background: #061116;
+    color: #C9E0E3;
+    border-bottom: 1px solid #174047;
+  }
+
+  .cg-graph .react-flow__controls-button:hover {
+    background: #08181D;
+  }
+
+  .cg-graph .react-flow__minimap-mask {
+    fill: rgba(0, 247, 255, 0.06);
+  }
+
+  .cg-graph .react-flow__attribution {
+    display: none;
+  }
+
+  .cg-empty-state {
+    animation: cg-fade-in 220ms ease-out;
+  }
+
+  /* GRAPHITE + AMBER FINAL POLISH */
+  .cg-graph .react-flow {
+    background: #02090C !important;
+  }
+  .cg-graph .react-flow__pane {
+    background: #02090C !important;
+  }
+  .cg-graph .react-flow__edge-textbg {
+    fill: #08181D !important;
+    stroke: #174047 !important;
+  }
+  .cg-graph .react-flow__edge-text {
+    fill: #C9E0E3 !important;
+  }
+  .cg-graph .react-flow__minimap {
+    background: #061116 !important;
+    border-color: #174047 !important;
+  }
+  .cg-graph-actions {
+    background: rgba(15, 17, 19, 0.96) !important;
+    border-color: #174047 !important;
+  }
+  .cg-filter {
+    background: rgba(15, 17, 19, 0.96) !important;
+    border-color: #174047 !important;
+  }
+
+  @keyframes cg-fade-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .cg-sidebar::-webkit-scrollbar { width: 7px; }
+  .cg-sidebar::-webkit-scrollbar-track { background: transparent; }
+  .cg-sidebar::-webkit-scrollbar-thumb { background: #24494C; border-radius: 999px; }
+  .cg-sidebar form { border-radius: 10px !important; }
+  .cg-sidebar input,
+  .cg-sidebar select,
+  .cg-sidebar textarea {
+    border-color: #174047 !important;
+    background: #071418 !important;
+    border-radius: 8px !important;
+  }
+  .cg-sidebar button { transition: filter 120ms ease, transform 120ms ease; }
+  .cg-sidebar button:hover:not(:disabled) { filter: brightness(1.08); }
+
+  /* Investigation report CTA: green success treatment with the same strong
+     border/glow language used by the danger/target treatment. */
+  .cg-generate-report {
+    color: #02090C !important;
+    text-shadow: none !important;
+    box-shadow:
+      0 0 0 1px rgba(73, 214, 160, 0.18),
+      0 0 14px rgba(73, 214, 160, 0.30),
+      0 5px 18px rgba(0, 0, 0, 0.24) !important;
+    transition:
+      background 140ms ease,
+      border-color 140ms ease,
+      box-shadow 140ms ease,
+      transform 140ms ease,
+      filter 140ms ease !important;
+  }
+
+  .cg-generate-report:hover:not(:disabled) {
+    background: #63E6B1 !important;
+    border-color: #63E6B1 !important;
+    color: #02090C !important;
+    box-shadow:
+      0 0 0 1px rgba(99, 230, 177, 0.24),
+      0 0 20px rgba(73, 214, 160, 0.48),
+      0 7px 22px rgba(0, 0, 0, 0.28) !important;
+    transform: translateY(-1px);
+  }
+
+  .cg-generate-report:disabled {
+    color: #8FB7AA !important;
+    box-shadow: 0 0 0 1px rgba(73, 214, 160, 0.10) !important;
   }
 
   @media (max-width: 1150px) {
-    .cg-sidebar { width: 270px !important; }
-    .cg-filter { left: 54% !important; }
-    .cg-investigation { width: 290px !important; }
+    .cg-sidebar { width: 300px !important; }
+    .cg-filter { left: 52% !important; }
+    .cg-investigation { width: 330px !important; }
   }
 
   @media (max-width: 850px) {
@@ -8968,7 +10514,12 @@ const responsiveCss = `
     .cg-graph-actions {
       top: 8px !important;
       right: 8px !important;
-      max-width: 190px !important;
+      max-width: calc(100vw - 16px) !important;
+      overflow-x: auto !important;
+      justify-content: flex-start !important;
+    }
+    .cg-graph-actions button {
+      flex: 0 0 auto !important;
     }
     .cg-investigation {
       left: 8px !important;
@@ -8977,17 +10528,110 @@ const responsiveCss = `
       max-height: 42vh !important;
     }
   }
+
+  /* FINAL BUTTON READABILITY */
+  .cg-header button,
+  .cg-sidebar button,
+  .cg-investigation button,
+  .cg-graph-actions button {
+    font-size: 16px !important;
+    line-height: 1.2 !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cg-graph-actions button {
+    min-height: 32px;
+  }
+
+  /* Align analysis section titles with their descriptions. */
+  .cg-sidebar h3 {
+    text-align: left !important;
+  }
 `;
 
 const workspaceToggleButtonStyle: React.CSSProperties = {
-  background: "#202636",
-  color: "#cbd5e1",
-  border: "1px solid #39445a",
-  borderRadius: "6px",
-  padding: "7px 9px",
+  background: "#061116",
+  color: "#D8EAEC",
+  border: "1px solid #174047",
+  borderRadius: "8px",
+  padding: "8px 11px",
   cursor: "pointer",
-  fontSize: "11px",
+  fontSize: "16px",
+  fontWeight: 700,
+  transition: "background 140ms ease, border-color 140ms ease",
+};
+
+const investigationMenuStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "8px",
+  marginBottom: "10px",
+};
+
+const investigationMenuButtonStyle: React.CSSProperties = {
+  width: "100%",
+  minHeight: "46px",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "12px",
+  padding: "10px 13px",
+  boxSizing: "border-box",
+  border: "1px solid #174047",
+  borderRadius: "8px",
+  background: "#07151A",
+  color: "#E9FAFB",
+  cursor: "pointer",
+  fontFamily: "Inter, Arial, sans-serif",
+  fontSize: "15px",
   fontWeight: 600,
+  textAlign: "left",
+  transition: "background 140ms ease, border-color 140ms ease, transform 140ms ease",
+};
+
+const investigationMenuArrowStyle: React.CSSProperties = {
+  color: "#00F7FF",
+  fontSize: "24px",
+  lineHeight: 1,
+  fontWeight: 400,
+  flex: "0 0 auto",
+};
+
+const investigationBackBarStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "10px",
+  marginBottom: "12px",
+  paddingBottom: "10px",
+  borderBottom: "1px solid #15363B",
+};
+
+const investigationBackButtonStyle: React.CSSProperties = {
+  width: "34px",
+  height: "34px",
+  minWidth: "34px",
+  padding: 0,
+  display: "grid",
+  placeItems: "center",
+  border: "1px solid #174047",
+  borderRadius: "7px",
+  background: "#07151A",
+  color: "#00F7FF",
+  cursor: "pointer",
+  fontFamily: "Inter, Arial, sans-serif",
+  fontSize: "22px",
+  lineHeight: 1,
+  fontWeight: 500,
+};
+
+const investigationBackTitleStyle: React.CSSProperties = {
+  minWidth: 0,
+  color: "#F3FAFA",
+  fontSize: "16px",
+  fontWeight: 700,
+  lineHeight: 1.2,
 };
 
 const investigationTabsStyle: React.CSSProperties = {
@@ -8996,8 +10640,8 @@ const investigationTabsStyle: React.CSSProperties = {
   gap: "4px",
   padding: "3px",
   marginBottom: "10px",
-  background: "#0f1117",
-  border: "1px solid #2f3545",
+  background: "#02090C",
+  border: "1px solid #12252A",
   borderRadius: "7px",
 };
 
@@ -9006,17 +10650,17 @@ const investigationTabStyle = (active: boolean): React.CSSProperties => ({
   borderRadius: "5px",
   padding: "7px 8px",
   cursor: "pointer",
-  background: active ? "#2563eb" : "transparent",
-  color: active ? "#ffffff" : "#94a3b8",
-  fontSize: "10px",
+  background: active ? "#00F7FF" : "transparent",
+  color: active ? "#02090C" : "#A9C5C8",
+  fontSize: "12px",
   fontWeight: 700,
 });
 
 const filterCountBadgeStyle: React.CSSProperties = {
   padding: "2px 6px",
   borderRadius: "999px",
-  background: "#202a3d",
-  color: "#93c5fd",
+  background: "#0B1D22",
+  color: "#65F9FF",
   fontSize: "9px",
   fontWeight: 700,
 };
@@ -9025,12 +10669,12 @@ const filterIconButtonStyle: React.CSSProperties = {
   width: "22px",
   height: "22px",
   padding: 0,
-  border: "1px solid #3b4254",
+  border: "1px solid #174047",
   borderRadius: "5px",
-  background: "#202636",
-  color: "#cbd5e1",
+  background: "#153033",
+  color: "#D8EAEC",
   cursor: "pointer",
-  fontSize: "14px",
+  fontSize: "16px",
   lineHeight: 1,
 };
 
@@ -9038,23 +10682,30 @@ const graphFilterInputStyle = {
   width: "100%",
   boxSizing: "border-box" as const,
   padding: "7px 8px",
-  background: "#0f1117",
-  color: "#ffffff",
-  border: "1px solid #3b4254",
+  background: "#02090C",
+  color: "#F3FAFA",
+  border: "1px solid #174047",
   borderRadius: "5px",
   outline: "none",
   fontSize: "10px",
 };
 
 const graphControlButtonStyle = {
-  background: "#272d3a",
-  color: "#ffffff",
-  border: "1px solid #475569",
-  borderRadius: "5px",
-  padding: "7px 10px",
+  background: "#0B1D22",
+  color: "#F3FAFA",
+  border: "1px solid #34545A",
+  borderRadius: "6px",
+  padding: "0 11px",
+  height: "32px",
+  minWidth: "76px",
   cursor: "pointer",
   fontSize: "11px",
   fontWeight: 600,
+  whiteSpace: "nowrap",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  boxSizing: "border-box",
 } as const;
 
 function formatSeconds(seconds: number | null): string {
@@ -9081,8 +10732,8 @@ function formatSeconds(seconds: number | null): string {
 
 const analyticsStatStyle: React.CSSProperties = {
   padding: "8px",
-  background: "#0f1117",
-  border: "1px solid #3b4254",
+  background: "#02090C",
+  border: "1px solid #174047",
   borderRadius: "6px",
   display: "flex",
   flexDirection: "column",
@@ -9092,17 +10743,17 @@ const analyticsStatStyle: React.CSSProperties = {
 const analyticsEmptyStyle: React.CSSProperties = {
   marginTop: "7px",
   padding: "8px",
-  color: "#64748b",
+  color: "#8EADB1",
   fontSize: "10px",
-  background: "#0f1117",
+  background: "#02090C",
   borderRadius: "5px",
 };
 
 const analyticsListItemStyle: React.CSSProperties = {
   marginTop: "7px",
   padding: "9px",
-  background: "#0f1117",
-  border: "1px solid #3b4254",
+  background: "#02090C",
+  border: "1px solid #174047",
   borderRadius: "6px",
   fontSize: "10px",
   lineHeight: 1.45,
@@ -9111,8 +10762,8 @@ const analyticsListItemStyle: React.CSSProperties = {
 const analyticsSignalStyle: React.CSSProperties = {
   marginTop: "7px",
   padding: "9px",
-  background: "#172033",
-  border: "1px solid #334155",
+  background: "#08181D",
+  border: "1px solid #174047",
   borderRadius: "6px",
   fontSize: "10px",
   lineHeight: 1.45,
@@ -9122,8 +10773,8 @@ const analyticsSeverityStyle: React.CSSProperties = {
   marginLeft: "7px",
   padding: "2px 5px",
   borderRadius: "999px",
-  background: "#202a3d",
-  color: "#93c5fd",
+  background: "#0B1D22",
+  color: "#65F9FF",
   fontSize: "8px",
   textTransform: "uppercase",
 };
@@ -9136,19 +10787,19 @@ function formatMlValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-const analyticsWarningStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#2a1f0b", border: "1px solid #92400e", borderRadius: "6px", color: "#fcd34d", fontSize: "11px", lineHeight: 1.5 };
-const analyticsLoadingStyle: React.CSSProperties = { padding: "14px", color: "#94a3b8", fontSize: "11px", textAlign: "center" };
-const mlNoticeStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#172033", border: "1px solid #334155", borderRadius: "6px", color: "#cbd5e1", fontSize: "10px", lineHeight: 1.45 };
-const featureRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "8px", padding: "6px 0", borderBottom: "1px solid #242b39", fontSize: "9px" };
-const amlIndicatorStyle: React.CSSProperties = { marginTop: "7px", padding: "9px", background: "#172033", border: "1px solid #3b4254", borderRadius: "6px", fontSize: "10px", lineHeight: 1.45 };
-const noteCardStyle: React.CSSProperties = { marginTop: "8px", padding: "10px", background: "#0f1117", border: "1px solid #3b4254", borderRadius: "6px" };
-const noteMetaStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: "8px", marginTop: "8px", color: "#64748b", fontSize: "8px", lineHeight: 1.4, flexWrap: "wrap" };
+const analyticsWarningStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#10282C", border: "1px solid #12434A", borderRadius: "6px", color: "#2DEAF2", fontSize: "11px", lineHeight: 1.5 };
+const analyticsLoadingStyle: React.CSSProperties = { padding: "14px", color: "#B8D4D7", fontSize: "11px", textAlign: "center" };
+const mlNoticeStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#08181D", border: "1px solid #174047", borderRadius: "6px", color: "#D8EAEC", fontSize: "10px", lineHeight: 1.45 };
+const featureRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "8px", padding: "6px 0", borderBottom: "1px solid #293629", fontSize: "9px" };
+const amlIndicatorStyle: React.CSSProperties = { marginTop: "7px", padding: "9px", background: "#08181D", border: "1px solid #174047", borderRadius: "6px", fontSize: "10px", lineHeight: 1.45 };
+const noteCardStyle: React.CSSProperties = { marginTop: "8px", padding: "10px", background: "#02090C", border: "1px solid #174047", borderRadius: "6px" };
+const noteMetaStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: "8px", marginTop: "8px", color: "#8EADB1", fontSize: "8px", lineHeight: 1.4, flexWrap: "wrap" };
 const noteActionsStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: "6px", marginTop: "8px" };
-const notePrimaryActionStyle: React.CSSProperties = { border: "1px solid #2563eb", borderRadius: "5px", padding: "5px 8px", background: "#2563eb", color: "#ffffff", cursor: "pointer", fontSize: "9px", fontWeight: 700 };
-const noteSecondaryActionStyle: React.CSSProperties = { border: "1px solid #475569", borderRadius: "5px", padding: "5px 8px", background: "#272d3a", color: "#cbd5e1", cursor: "pointer", fontSize: "9px", fontWeight: 700 };
-const noteDangerActionStyle: React.CSSProperties = { border: "1px solid #7f1d1d", borderRadius: "5px", padding: "5px 8px", background: "#2a1518", color: "#fca5a5", cursor: "pointer", fontSize: "9px", fontWeight: 700 };
-const evidencePreStyle: React.CSSProperties = { margin: "6px 0 0", padding: "8px", maxHeight: "180px", overflow: "auto", background: "#0f1117", borderRadius: "5px", color: "#cbd5e1", fontSize: "9px", whiteSpace: "pre-wrap", wordBreak: "break-word" };
-const amlDisclaimerStyle: React.CSSProperties = { marginTop: "12px", padding: "9px", background: "#0f1117", border: "1px solid #3b4254", borderRadius: "6px", color: "#94a3b8", fontSize: "9px", lineHeight: 1.5 };
+const notePrimaryActionStyle: React.CSSProperties = { border: "1px solid #00F7FF", borderRadius: "5px", padding: "5px 8px", background: "#00F7FF", color: "#02090C", cursor: "pointer", fontSize: "16px", fontWeight: 700 };
+const noteSecondaryActionStyle: React.CSSProperties = { border: "1px solid #34545A", borderRadius: "5px", padding: "5px 8px", background: "#0B1D22", color: "#D8EAEC", cursor: "pointer", fontSize: "16px", fontWeight: 700 };
+const noteDangerActionStyle: React.CSSProperties = { border: "1px solid #6A292D", borderRadius: "5px", padding: "5px 8px", background: "#2a1518", color: "#E6A3A0", cursor: "pointer", fontSize: "9px", fontWeight: 700 };
+const evidencePreStyle: React.CSSProperties = { margin: "6px 0 0", padding: "8px", maxHeight: "180px", overflow: "auto", background: "#02090C", borderRadius: "5px", color: "#D8EAEC", fontSize: "9px", whiteSpace: "pre-wrap", wordBreak: "break-word" };
+const amlDisclaimerStyle: React.CSSProperties = { marginTop: "12px", padding: "9px", background: "#02090C", border: "1px solid #174047", borderRadius: "6px", color: "#B8D4D7", fontSize: "9px", lineHeight: 1.5 };
 
 /* =========================
    RISK DASHBOARD
@@ -9167,7 +10818,7 @@ function RiskDashboard({
         paddingTop:
           "16px",
         borderTop:
-          "1px solid #2f3545",
+          "1px solid #12252A",
       }}
     >
       <h3
@@ -9222,7 +10873,7 @@ function RiskDashboard({
                 fontSize:
                   "12px",
                 color:
-                  "#94a3b8",
+                  "#A9C5C8",
               }}
             >
               /100
@@ -9334,9 +10985,9 @@ function RiskDashboard({
           padding:
             "10px",
           background:
-            "#0f1117",
+            "#02090C",
           border:
-            "1px solid #3b4254",
+            "1px solid #174047",
           borderRadius:
             "6px",
           fontSize:
@@ -9556,9 +11207,9 @@ function RiskDashboard({
                 marginBottom:
                   "8px",
                 background:
-                  "#0f1117",
+                  "#02090C",
                 border:
-                  "1px solid #3b4254",
+                  "1px solid #174047",
                 borderRadius:
                   "6px",
               }}
@@ -9604,7 +11255,7 @@ function RiskDashboard({
                   fontSize:
                     "11px",
                   color:
-                    "#cbd5e1",
+                    "#C9E0E3",
                   lineHeight:
                     1.5,
                 }}
@@ -9649,9 +11300,9 @@ function RiskDashboard({
                   padding:
                     "10px",
                   background:
-                    "#0f1117",
+                    "#02090C",
                   border:
-                    "1px solid #3b4254",
+                    "1px solid #174047",
                   borderRadius:
                     "6px",
                   marginBottom:
@@ -9891,7 +11542,7 @@ function getPeelPatternAssessment(candidate: PeelCandidate): {
   if (signalCount >= 5) {
     return {
       label: "Strong pattern",
-      color: "#4ade80",
+      color: "#00F7FF",
       signalCount,
     };
   }
@@ -9899,14 +11550,14 @@ function getPeelPatternAssessment(candidate: PeelCandidate): {
   if (signalCount >= 4) {
     return {
       label: "Moderate pattern",
-      color: "#facc15",
+      color: "#2DEAF2",
       signalCount,
     };
   }
 
   return {
     label: "Limited pattern",
-    color: "#f87171",
+    color: "#FF817F",
     signalCount,
   };
 }
@@ -9938,19 +11589,19 @@ function riskLevelColor(
 ) {
   switch (level) {
     case "critical":
-      return "#f87171";
+      return "#FF817F";
 
     case "high":
-      return "#fb923c";
+      return "#00AAB2";
 
     case "moderate":
-      return "#facc15";
+      return "#2DEAF2";
 
     case "low":
-      return "#4ade80";
+      return "#00F7FF";
 
     default:
-      return "#ffffff";
+      return "#F3FAFA";
   }
 }
 
@@ -9959,19 +11610,19 @@ function riskSeverityColor(
 ) {
   switch (severity) {
     case "critical":
-      return "#f87171";
+      return "#FF817F";
 
     case "high":
-      return "#fb923c";
+      return "#00AAB2";
 
     case "medium":
-      return "#facc15";
+      return "#2DEAF2";
 
     case "low":
-      return "#4ade80";
+      return "#00F7FF";
 
     default:
-      return "#cbd5e1";
+      return "#C9E0E3";
   }
 }
 
@@ -9988,11 +11639,11 @@ const inputStyle: React.CSSProperties =
     marginBottom:
       "4px",
     background:
-      "#0f1117",
+      "#02090C",
     color:
-      "#ffffff",
+      "#F3FAFA",
     border:
-      "1px solid #3b4254",
+      "1px solid #174047",
     borderRadius:
       "6px",
     outline:
@@ -10006,7 +11657,7 @@ const labelStyle: React.CSSProperties =
     fontSize:
       "12px",
     color:
-      "#cbd5e1",
+      "#C9E0E3",
     marginTop:
       "10px",
     marginBottom:
@@ -10018,13 +11669,13 @@ const secondaryButtonStyle: React.CSSProperties =
     width: "auto",
     marginTop: 0,
     padding: "7px 10px",
-    background: "#111827",
-    color: "#cbd5e1",
-    border: "1px solid #334155",
+    background: "#061116",
+    color: "#D8EAEC",
+    border: "1px solid #174047",
     borderRadius: "6px",
     cursor: "pointer",
     fontWeight: 600,
-    fontSize: "10px",
+    fontSize: "16px",
   };
 
 const primaryButtonStyle: React.CSSProperties =
@@ -10033,19 +11684,21 @@ const primaryButtonStyle: React.CSSProperties =
     marginTop:
       "16px",
     padding:
-      "10px",
+      "10px 12px",
     background:
-      "#2563eb",
+      "#00F7FF",
     color:
-      "#ffffff",
+      "#02090C",
     border:
-      "none",
+      "1px solid #00F7FF",
     borderRadius:
-      "6px",
+      "8px",
     cursor:
       "pointer",
     fontWeight:
-      600,
+      700,
+    fontSize:
+      "16px",
   };
 
 const riskButtonStyle: React.CSSProperties =
@@ -10056,9 +11709,9 @@ const riskButtonStyle: React.CSSProperties =
     padding:
       "10px",
     background:
-      "#7c3aed",
+      "#00F7FF",
     color:
-      "#ffffff",
+      "#02090C",
     border:
       "none",
     borderRadius:
@@ -10066,7 +11719,9 @@ const riskButtonStyle: React.CSSProperties =
     cursor:
       "pointer",
     fontWeight:
-      600,
+      700,
+    fontSize:
+      "16px",
   };
 
 const statCardStyle: React.CSSProperties =
@@ -10074,11 +11729,11 @@ const statCardStyle: React.CSSProperties =
     padding:
       "12px",
     background:
-      "#0f1117",
+      "#02090C",
     borderRadius:
       "6px",
     border:
-      "1px solid #3b4254",
+      "1px solid #174047",
   };
 
 const miniStatStyle: React.CSSProperties =
@@ -10086,11 +11741,11 @@ const miniStatStyle: React.CSSProperties =
     padding:
       "8px",
     background:
-      "#0f1117",
+      "#02090C",
     borderRadius:
       "6px",
     border:
-      "1px solid #3b4254",
+      "1px solid #174047",
     display:
       "flex",
     flexDirection:
@@ -10100,7 +11755,7 @@ const miniStatStyle: React.CSSProperties =
     fontSize:
       "10px",
     color:
-      "#94a3b8",
+      "#A9C5C8",
   };
 
 const behaviorCardStyle: React.CSSProperties =
@@ -10108,9 +11763,9 @@ const behaviorCardStyle: React.CSSProperties =
     padding:
       "8px",
     background:
-      "#0f1117",
+      "#02090C",
     border:
-      "1px solid #3b4254",
+      "1px solid #174047",
     borderRadius:
       "6px",
     display:
@@ -10122,7 +11777,7 @@ const behaviorCardStyle: React.CSSProperties =
     fontSize:
       "10px",
     color:
-      "#94a3b8",
+      "#A9C5C8",
   };
 
 const smallTitleStyle: React.CSSProperties =
@@ -10130,7 +11785,7 @@ const smallTitleStyle: React.CSSProperties =
     fontSize:
       "11px",
     color:
-      "#94a3b8",
+      "#A9C5C8",
   };
 
 const panelSectionStyle: React.CSSProperties =
@@ -10140,7 +11795,7 @@ const panelSectionStyle: React.CSSProperties =
     paddingTop:
       "12px",
     borderTop:
-      "1px solid #2f3545",
+      "1px solid #12252A",
   };
 
 const sectionTitleStyle: React.CSSProperties =
@@ -10150,7 +11805,7 @@ const sectionTitleStyle: React.CSSProperties =
     fontWeight:
       700,
     color:
-      "#ffffff",
+      "#F3FAFA",
   };
 
 const detailRowStyle: React.CSSProperties =
@@ -10166,11 +11821,13 @@ const detailRowStyle: React.CSSProperties =
     fontSize:
       "11px",
     color:
-      "#cbd5e1",
+      "#C9E0E3",
   };
 
 
 export default App;
+
+
 
 
 
