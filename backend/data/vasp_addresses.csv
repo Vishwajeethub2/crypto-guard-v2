@@ -1,3 +1,7 @@
 address,chain,entity_type,entity_name,intelligence_source,risk_category,confidence,evidence
 0x71660c4005BA85c37ccec55d0C4493E66Fe775d3,ethereum,vasp,Coinbase,Etherscan,centralized_exchange,0.95,"Etherscan identifies this address as Coinbase 1 and categorizes it as Coinbase / Exchange / Fiat Gateway / API."
 0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE,ethereum,vasp,Binance,Etherscan,centralized_exchange,0.95,"Etherscan identifies this address as Binance and categorizes it as Exchange / Binance / API."
+0x503828976D22510aad0201ac7EC88293211D23Da,base,vasp,Coinbase,BaseScan,centralized_exchange,0.95,"BaseScan identifies this address as Coinbase 12 and categorizes it as Exchange / API."
+0xBE0eB53F46cd790Cd13851d5EFf43D12404d33E8,polygon,vasp,Binance,PolygonScan,centralized_exchange,0.95,"PolygonScan identifies this address as Binance 7 and categorizes it as Exchange / API."
+0xB38e8c17E38363Af6EbDCB3DAE12E0243582891D,arbitrum,vasp,Binance,ArbitrumScan,centralized_exchange,0.95,"ArbitrumScan identifies this address as Binance 54 and lists it under Exchange accounts."
+0x18e226459CCf0Eec276514a4fd3b226D8961e4d1,optimism,vasp,Binance,Optimism Etherscan,centralized_exchange,0.95,"Optimism Etherscan identifies this address as Binance 107 and categorizes it as Exchange / API."

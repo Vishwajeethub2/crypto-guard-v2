@@ -389,6 +389,10 @@ type VaspCandidate = {
   source: string | null;
   risk_category: string | null;
   confidence: number | null;
+  intelligence_confidence?: number | null;
+  attribution_score?: number | null;
+  hop_proximity_score?: number | null;
+  match_strength?: string | null;
   evidence: string | null;
   hop: number | null;
   attribution_basis: string;
@@ -849,6 +853,7 @@ function App() {
       | "notes"
       | "evidence"
     >("wallet");
+    
 
   const [investigationMenuOpen, setInvestigationMenuOpen] =
     useState(true);
