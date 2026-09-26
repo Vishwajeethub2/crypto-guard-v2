@@ -1,0 +1,22 @@
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: #f3f6f4;
+}
+
+body {
+  min-height: 100vh;
+  background: #f3f6f4;
+}
+
+#root {
+  min-height: 100vh;
+}

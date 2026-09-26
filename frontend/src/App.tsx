@@ -880,6 +880,16 @@ function App() {
   const [reportLoading, setReportLoading] =
     useState(false);
 
+  const [requestSentMessage, setRequestSentMessage] =
+    useState(false);
+
+  const [pendingInvestigationRequest, setPendingInvestigationRequest] =
+    useState<{
+      caseId: string;
+      filename: string;
+      pdfBuffer: ArrayBuffer;
+    } | null>(null);
+
   const [error, setError] =
     useState<string | null>(null);
 
@@ -1904,6 +1914,9 @@ function App() {
     setAuthMode("login");
     setVerificationEmail("");
     setVerificationCode("");
+
+    setRequestSentMessage(false);
+    setPendingInvestigationRequest(null);
   }
 
   /* =========================
@@ -2394,6 +2407,184 @@ function App() {
       );
     } finally {
       setReportLoading(false);
+    }
+  }
+    /* =========================
+     SEND INVESTIGATION REPORT
+  ========================= */
+
+  async function handleSendInvestigationReport() {
+    if (!token) {
+      setError("Please login first.");
+      return;
+    }
+
+    if (!selectedCase) {
+      setError("Create or select a case first.");
+      return;
+    }
+
+    setReportLoading(true);
+    setError(null);
+    setRequestSentMessage(false);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/cases/${selectedCase.id}/reports`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      if (response.status === 401) {
+        localStorage.removeItem("access_token");
+        setToken(null);
+
+        throw new Error(
+          "Session expired. Please login again.",
+        );
+      }
+
+      if (!response.ok) {
+        const message = await response.text();
+
+        throw new Error(
+          message ||
+            `Report generation returned ${response.status}`,
+        );
+      }
+
+      const pdfBuffer = await response.arrayBuffer();
+
+      if (pdfBuffer.byteLength === 0) {
+        throw new Error(
+          "The generated report was empty.",
+        );
+      }
+
+      const contentDisposition =
+        response.headers.get("Content-Disposition");
+
+      const filenameMatch =
+        contentDisposition?.match(
+          /filename="?([^";]+)"?/i,
+        );
+
+      const filename =
+        filenameMatch?.[1] ||
+        `case_${selectedCase.id}_investigation_report.pdf`;
+
+      /*
+       * Keep the actual generated PDF in memory.
+       * It will be transferred when the user opens
+       * the demo investigation portal.
+       */
+      setPendingInvestigationRequest({
+        caseId: String(selectedCase.id),
+        filename,
+        pdfBuffer,
+      });
+
+      setRequestSentMessage(true);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to send investigation report",
+      );
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
+  /* =========================
+     OPEN DEMO INVESTIGATION PORTAL
+  ========================= */
+
+  function handleOpenInvestigationPortal() {
+    if (!pendingInvestigationRequest) {
+      setError(
+        "Please send an investigation report first.",
+      );
+      return;
+    }
+
+    const portalUrl = "http://localhost:5174/";
+
+    let portalWindow: Window | null = null;
+
+    const handlePortalReady = (event: MessageEvent) => {
+      if (
+        event.origin !== "http://localhost:5174" ||
+        event.data?.type !==
+          "CRYPTO_GUARD_DEMO_PORTAL_READY"
+      ) {
+        return;
+      }
+
+      if (!portalWindow) {
+        return;
+      }
+
+      try {
+        const request = pendingInvestigationRequest;
+
+        portalWindow.postMessage(
+          {
+            type: "CRYPTO_GUARD_INVESTIGATION_REQUEST",
+            caseId: request.caseId,
+            filename: request.filename,
+            pdfBuffer: request.pdfBuffer,
+          },
+          "http://localhost:5174",
+          [request.pdfBuffer],
+        );
+
+        setPendingInvestigationRequest(null);
+        setRequestSentMessage(false);
+
+        window.removeEventListener(
+          "message",
+          handlePortalReady,
+        );
+      } catch (err) {
+        console.error(
+          "Failed to send investigation request to demo portal:",
+          err,
+        );
+
+        setError(
+          "The investigation request could not be sent to the demo portal.",
+        );
+      }
+    };
+
+    /*
+     * Listen before opening the portal so the ready
+     * message cannot be missed.
+     */
+    window.addEventListener(
+      "message",
+      handlePortalReady,
+    );
+
+    portalWindow = window.open(
+      portalUrl,
+      "_blank",
+    );
+
+    if (!portalWindow) {
+      window.removeEventListener(
+        "message",
+        handlePortalReady,
+      );
+
+      setError(
+        "The demo portal could not be opened. Please allow pop-ups for localhost.",
+      );
     }
   }
 
@@ -5625,6 +5816,69 @@ function App() {
               >
                 {reportLoading ? "Generating Investigation Report..." : "📄 Generate Investigation Report"}
               </button>
+
+              <button
+                type="button"
+                onClick={handleSendInvestigationReport}
+                disabled={reportLoading}
+                style={{
+                  marginTop: "8px",
+                  width: "100%",
+                  padding: "8px 10px",
+                  border: "1px solid #00F7FF",
+                  borderRadius: "6px",
+                  background: "#071C20",
+                  color: "#00F7FF",
+                  cursor: reportLoading ? "not-allowed" : "pointer",
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  opacity: reportLoading ? 0.6 : 1,
+                }}
+              >
+                {reportLoading
+                  ? "Sending Investigation Report..."
+                  : "Send Investigation Report →"}
+              </button>
+
+              {requestSentMessage &&
+                pendingInvestigationRequest && (
+                  <>
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        padding: "10px 12px",
+                        border: "1px solid #49D6A0",
+                        borderRadius: "6px",
+                        background: "rgba(73, 214, 160, 0.08)",
+                        color: "#49D6A0",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      ✓ Investigation request sent successfully
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenInvestigationPortal}
+                      style={{
+                        marginTop: "8px",
+                        width: "100%",
+                        padding: "9px 10px",
+                        border: "1px solid #00F7FF",
+                        borderRadius: "6px",
+                        background: "#00F7FF",
+                        color: "#02090C",
+                        cursor: "pointer",
+                        fontSize: "14px",
+                        fontWeight: 800,
+                      }}
+                    >
+                      Open Investigation Portal →
+                    </button>
+                  </>
+                )}
             </div>
           )}
 
