@@ -4652,13 +4652,11 @@ function App() {
         color: "#172326",
         overflow: "hidden",
         fontFamily:
-          'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          "Inter, Arial, sans-serif",
       }}
     >
       <style>{responsiveCss}</style>
       <style>{`
-        @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
-
         /* GRAPHITE + AMBER TYPOGRAPHY POLISH */
         .cg-header,
         .cg-sidebar,
@@ -4899,7 +4897,7 @@ function App() {
                     style={{
                       color: "#6F7F81",
                       fontSize: "11px",
-                      fontFamily: '"JetBrains Mono", monospace',
+                      fontFamily: "monospace",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
@@ -7118,7 +7116,7 @@ function App() {
                                         whiteSpace: "nowrap",
                                         overflow: "hidden",
                                         textOverflow: "ellipsis",
-                                        fontFamily: '"JetBrains Mono", monospace',
+                                        fontFamily: "monospace",
                                       }}
                                     >
                                       {shortAddress}
@@ -8155,7 +8153,7 @@ function App() {
                         <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "flex-start" }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={sectionTitleStyle}>{candidate.name ?? "Known VASP"}</div>
-                            <div className="cg-mono" style={{ marginTop: "5px", color: "#6F7F81", fontSize: "9px", wordBreak: "break-all" }}>{candidate.address}</div>
+                            <div style={{ marginTop: "5px", color: "#6F7F81", fontSize: "9px", wordBreak: "break-all" }}>{candidate.address}</div>
                           </div>
                           <span style={{ ...analyticsSeverityStyle, color: "#3AA0A3", flexShrink: 0 }}>
                             {candidate.confidence !== null ? `${(candidate.confidence * 100).toFixed(1)}%` : "N/A"}
@@ -8182,7 +8180,7 @@ function App() {
                             <div style={{ marginTop: "4px", wordBreak: "break-all" }}>{candidate.wallets.join(" → ")}</div>
                             {candidate.transfers.map((transfer, transferIndex) => (
                               <div key={`${transfer.transaction_hash}-${transferIndex}`} style={{ marginTop: "8px", padding: "8px", background: "#F5F7F6", border: "1px solid #DDE5E3", borderRadius: "6px" }}>
-                                <div><strong>Transaction:</strong> <span className="cg-mono" style={{ wordBreak: "break-all" }}>{transfer.transaction_hash}</span></div>
+                                <div><strong>Transaction:</strong> <span style={{ wordBreak: "break-all" }}>{transfer.transaction_hash}</span></div>
                                 <div style={{ marginTop: "4px" }}><strong>Asset:</strong> {transfer.asset ?? "N/A"} · <strong>Value:</strong> {transfer.value ?? "N/A"}</div>
                                 <div style={{ marginTop: "4px" }}><strong>Category:</strong> {transfer.category ?? "N/A"} · <strong>Block:</strong> {transfer.block_number ?? "N/A"}</div>
                                 <div style={{ marginTop: "4px" }}><strong>Timestamp:</strong> {transfer.timestamp ?? "N/A"}</div>
@@ -8919,7 +8917,6 @@ function App() {
                               {candidate.name ?? "Known VASP"}
                             </div>
                             <div
-                              className="cg-mono"
                               style={{
                                 marginTop: "5px",
                                 color: "#6F7F81",
@@ -9094,7 +9091,7 @@ function App() {
                                 >
                                   <div>
                                     <strong>Transaction:</strong>{" "}
-                                    <span className="cg-mono" style={{ wordBreak: "break-all" }}>
+                                    <span style={{ wordBreak: "break-all" }}>
                                       {transfer.transaction_hash}
                                     </span>
                                   </div>
@@ -9975,8 +9972,8 @@ function App() {
                     <div style={{ marginTop: "7px" }}>
                       {Object.entries(mlRisk.features).map(([name, value]) => (
                         <div key={name} style={featureRowStyle}>
-                          <span style={{ color: "#6F7F81", wordBreak: "break-word" }}>{name}</span>
-                          <strong style={{ textAlign: "right", wordBreak: "break-word" }}>{formatMlValue(value)}</strong>
+                          <span style={{ color: "#6F7F81", minWidth: 0, textAlign: "left", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={name}>{name}</span>
+                          <strong style={{ minWidth: 0, textAlign: "right", whiteSpace: "nowrap" }}>{formatMlValue(value)}</strong>
                         </div>
                       ))}
                     </div>
@@ -10775,7 +10772,7 @@ const responsiveCss = `
     fill: rgba(22, 124, 128, 0.08) !important;
   }
   .cg-graph .react-flow__node {
-    font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: Arial, sans-serif;
   }
   .cg-graph .react-flow__edge-textbg {
     fill: #FFFFFF !important;
@@ -11337,11 +11334,6 @@ const responsiveCss = `
      Presentation-only. Graph data, tracing, expansion and handlers are untouched.
   ================================================================ */
 
-  .cg-mono {
-    font-family: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace !important;
-    font-variant-ligatures: none;
-  }
-
   .cg-graph .react-flow__node {
     font-family: Inter, system-ui, sans-serif !important;
     font-weight: 600 !important;
@@ -11723,7 +11715,7 @@ const investigationMenuButtonStyle: React.CSSProperties = {
   background: "#F5F7F6",
   color: "#172326",
   cursor: "pointer",
-  fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontFamily: "Inter, Arial, sans-serif",
   fontSize: "13px",
   fontWeight: 650,
   textAlign: "left",
@@ -11759,7 +11751,7 @@ const investigationBackButtonStyle: React.CSSProperties = {
   background: "#F5F7F6",
   color: "#167C80",
   cursor: "pointer",
-  fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontFamily: "Inter, Arial, sans-serif",
   fontSize: "20px",
   lineHeight: 1,
   fontWeight: 500,
@@ -11907,7 +11899,7 @@ function formatMlValue(value: unknown): string {
 const analyticsWarningStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#E1E9E7", border: "1px solid #C4D8D5", borderRadius: "6px", color: "#A67C32", fontSize: "11px", lineHeight: 1.5 };
 const analyticsLoadingStyle: React.CSSProperties = { padding: "14px", color: "#6F7F81", fontSize: "11px", textAlign: "center" };
 const mlNoticeStyle: React.CSSProperties = { marginTop: "10px", padding: "10px", background: "#F8FAF9", border: "1px solid #C8D4D1", borderRadius: "6px", color: "#334447", fontSize: "10px", lineHeight: 1.45 };
-const featureRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "8px", padding: "6px 0", borderBottom: "1px solid #EAF3EC", fontSize: "9px" };
+const featureRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center", gap: "8px", padding: "7px 0", borderBottom: "1px solid #EAF3EC", fontSize: "9px", lineHeight: 1.35 };
 const amlIndicatorStyle: React.CSSProperties = { marginTop: "7px", padding: "9px", background: "#F8FAF9", border: "1px solid #C8D4D1", borderRadius: "6px", fontSize: "10px", lineHeight: 1.45 };
 const noteCardStyle: React.CSSProperties = { marginTop: "8px", padding: "10px", background: "#F5F7F6", border: "1px solid #C8D4D1", borderRadius: "6px" };
 const noteMetaStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: "8px", marginTop: "8px", color: "#7B8B8D", fontSize: "8px", lineHeight: 1.4, flexWrap: "wrap" };
