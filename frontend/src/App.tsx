@@ -450,6 +450,8 @@ type CaseEvidence = {
 };
 
 const API_URL = import.meta.env.VITE_API_URL;
+const DEMO_PORTAL_URL =
+  import.meta.env.VITE_DEMO_PORTAL_URL || "http://localhost:5174";
 
 function App() {
   const [, setHealth] =
@@ -2512,13 +2514,13 @@ function App() {
       return;
     }
 
-    const portalUrl = "http://localhost:5174/";
+    const portalUrl = DEMO_PORTAL_URL;
 
     let portalWindow: Window | null = null;
 
     const handlePortalReady = (event: MessageEvent) => {
       if (
-        event.origin !== "http://localhost:5174" ||
+        event.origin !== DEMO_PORTAL_URL.replace(/\/$/, "") ||
         event.data?.type !==
           "CRYPTO_GUARD_DEMO_PORTAL_READY"
       ) {
@@ -2539,7 +2541,7 @@ function App() {
             filename: request.filename,
             pdfBuffer: request.pdfBuffer,
           },
-          "http://localhost:5174",
+          DEMO_PORTAL_URL.replace(/\/$/, ""),
           [request.pdfBuffer],
         );
 
@@ -12063,6 +12065,9 @@ const detailRowStyle: React.CSSProperties =
 
 
 export default App;
+
+
+
 
 
 

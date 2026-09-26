@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
+const CRYPTO_GUARD_URL =
+  import.meta.env.VITE_CRYPTO_GUARD_URL || "http://localhost:5173";
+
 type RequestStatus = "pending" | "accepted";
 
 type InvestigationRequest = {
@@ -24,7 +27,10 @@ function App() {
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.origin !== "http://localhost:5173") {
+      if (
+        event.origin !==
+        CRYPTO_GUARD_URL.replace(/\/$/, "")
+      ) {
         return;
       }
 
@@ -69,7 +75,7 @@ function App() {
         {
           type: "CRYPTO_GUARD_DEMO_PORTAL_READY",
         },
-        "http://localhost:5173",
+        CRYPTO_GUARD_URL.replace(/\/$/, ""),
       );
     }
 
@@ -83,8 +89,8 @@ function App() {
       current.map((request) =>
         request.id === id
           ? { ...request, status: "accepted" }
-          : request
-      )
+          : request,
+      ),
     );
   };
 
@@ -112,7 +118,7 @@ function App() {
   };
 
   const pendingCount = requests.filter(
-    (request) => request.status === "pending"
+    (request) => request.status === "pending",
   ).length;
 
   return (
