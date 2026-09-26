@@ -5,7 +5,7 @@ const CRYPTO_GUARD_URL =
   import.meta.env.VITE_CRYPTO_GUARD_URL || "http://localhost:5173";
 
 const DB_NAME = "crypto-guard-demo-portal";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "investigation-requests";
 
 type RequestStatus = "pending" | "accepted";
@@ -32,19 +32,37 @@ type IncomingRequest = {
 
 function openRequestDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    if (!("indexedDB" in window)) {
+      reject(
+        new Error(
+          "IndexedDB is not available in this browser.",
+        ),
+      );
+      return;
+    }
+
+    const request = indexedDB.open(
+      DB_NAME,
+      DB_VERSION,
+    );
 
     request.onerror = () => {
       reject(
         request.error ||
-          new Error("Unable to open investigation request database."),
+          new Error(
+            "Unable to open investigation request database.",
+          ),
       );
     };
 
     request.onupgradeneeded = () => {
       const database = request.result;
 
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
+      if (
+        !database.objectStoreNames.contains(
+          STORE_NAME,
+        )
+      ) {
         database.createObjectStore(STORE_NAME, {
           keyPath: "id",
         });
@@ -52,7 +70,13 @@ function openRequestDatabase(): Promise<IDBDatabase> {
     };
 
     request.onsuccess = () => {
-      resolve(request.result);
+      const database = request.result;
+
+      database.onversionchange = () => {
+        database.close();
+      };
+
+      resolve(database);
     };
   });
 }
@@ -60,7 +84,8 @@ function openRequestDatabase(): Promise<IDBDatabase> {
 async function saveInvestigationRequest(
   investigationRequest: InvestigationRequest,
 ): Promise<void> {
-  const database = await openRequestDatabase();
+  const database =
+    await openRequestDatabase();
 
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(
@@ -68,7 +93,8 @@ async function saveInvestigationRequest(
       "readwrite",
     );
 
-    const store = transaction.objectStore(STORE_NAME);
+    const store =
+      transaction.objectStore(STORE_NAME);
 
     store.put(investigationRequest);
 
@@ -82,7 +108,9 @@ async function saveInvestigationRequest(
 
       reject(
         transaction.error ||
-          new Error("Unable to save investigation request."),
+          new Error(
+            "Unable to save investigation request.",
+          ),
       );
     };
 
@@ -91,7 +119,9 @@ async function saveInvestigationRequest(
 
       reject(
         transaction.error ||
-          new Error("Investigation request save was aborted."),
+          new Error(
+            "Investigation request save was aborted.",
+          ),
       );
     };
   });
@@ -100,7 +130,8 @@ async function saveInvestigationRequest(
 async function loadInvestigationRequests(): Promise<
   InvestigationRequest[]
 > {
-  const database = await openRequestDatabase();
+  const database =
+    await openRequestDatabase();
 
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(
@@ -108,7 +139,8 @@ async function loadInvestigationRequests(): Promise<
       "readonly",
     );
 
-    const store = transaction.objectStore(STORE_NAME);
+    const store =
+      transaction.objectStore(STORE_NAME);
 
     const request = store.getAll();
 
@@ -116,7 +148,8 @@ async function loadInvestigationRequests(): Promise<
       database.close();
 
       const requests =
-        (request.result as InvestigationRequest[]) || [];
+        (request.result as InvestigationRequest[]) ||
+        [];
 
       requests.sort(
         (a, b) =>
@@ -132,7 +165,9 @@ async function loadInvestigationRequests(): Promise<
 
       reject(
         request.error ||
-          new Error("Unable to load investigation requests."),
+          new Error(
+            "Unable to load investigation requests.",
+          ),
       );
     };
   });
@@ -141,7 +176,9 @@ async function loadInvestigationRequests(): Promise<
 async function updateInvestigationRequest(
   investigationRequest: InvestigationRequest,
 ): Promise<void> {
-  await saveInvestigationRequest(investigationRequest);
+  await saveInvestigationRequest(
+    investigationRequest,
+  );
 }
 
 /* ============================================================
@@ -153,23 +190,74 @@ function App() {
     InvestigationRequest[]
   >([]);
 
+  const [databaseReady, setDatabaseReady] =
+    useState(false);
+
+  const [databaseError, setDatabaseError] =
+    useState<string | null>(null);
+
   useEffect(() => {
+    let cancelled = false;
+
     /*
-     * Restore previously received investigation requests
-     * from IndexedDB when the portal loads or refreshes.
+     * First restore all previously received
+     * investigation requests.
+     *
+     * The message listener is intentionally
+     * registered only after IndexedDB restoration
+     * completes. This prevents an incoming request
+     * from being overwritten by an older database
+     * load.
      */
-    void loadInvestigationRequests()
-      .then((savedRequests) => {
+    const initializePortal = async () => {
+      try {
+        const savedRequests =
+          await loadInvestigationRequests();
+
+        if (cancelled) {
+          return;
+        }
+
         setRequests(savedRequests);
-      })
-      .catch((error) => {
+        setDatabaseReady(true);
+        setDatabaseError(null);
+      } catch (error) {
         console.error(
-          "Failed to restore investigation requests:",
+          "Failed to initialize investigation request database:",
           error,
         );
-      });
 
-    const handleMessage = (event: MessageEvent) => {
+        if (cancelled) {
+          return;
+        }
+
+        setDatabaseReady(true);
+        setDatabaseError(
+          "Local request storage is unavailable. Requests may not survive a refresh.",
+        );
+      }
+    };
+
+    void initializePortal();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    /*
+     * Do not start accepting investigation
+     * requests until the initial IndexedDB restore
+     * has completed.
+     */
+    if (!databaseReady) {
+      return;
+    }
+
+    const handleMessage = (
+      event: MessageEvent,
+    ) => {
       /*
        * Only accept messages from the configured
        * Crypto Guard V2 origin.
@@ -181,9 +269,10 @@ function App() {
         return;
       }
 
-      const data = event.data as Partial<IncomingRequest> & {
-        type?: string;
-      };
+      const data =
+        event.data as Partial<IncomingRequest> & {
+          type?: string;
+        };
 
       /*
        * Validate the incoming investigation request.
@@ -199,8 +288,8 @@ function App() {
       }
 
       /*
-       * Store the timestamp as ISO instead of a formatted
-       * string so sorting remains reliable after refresh.
+       * Store the timestamp as ISO so sorting
+       * remains reliable after refresh.
        */
       const newRequest: InvestigationRequest = {
         id: crypto.randomUUID(),
@@ -209,14 +298,18 @@ function App() {
         status: "pending",
         pdfData: data.pdfBuffer,
         filename:
-          data.filename || "Investigation Report.pdf",
+          data.filename ||
+          "Investigation Report.pdf",
       };
 
       /*
-       * Persist the complete request, including the actual
-       * investigation report PDF, before displaying it.
+       * Persist the complete request first.
+       * Only show it in the UI after IndexedDB
+       * confirms that the write succeeded.
        */
-      void saveInvestigationRequest(newRequest)
+      void saveInvestigationRequest(
+        newRequest,
+      )
         .then(() => {
           setRequests((current) => [
             newRequest,
@@ -248,7 +341,8 @@ function App() {
     if (window.opener) {
       window.opener.postMessage(
         {
-          type: "CRYPTO_GUARD_DEMO_PORTAL_READY",
+          type:
+            "CRYPTO_GUARD_DEMO_PORTAL_READY",
         },
         CRYPTO_GUARD_URL.replace(/\/$/, ""),
       );
@@ -260,26 +354,29 @@ function App() {
         handleMessage,
       );
     };
-  }, []);
+  }, [databaseReady]);
 
   /*
-   * Accept an investigation request and persist the
-   * new status in IndexedDB.
+   * Accept an investigation request and persist
+   * the new status in IndexedDB.
    */
   const acceptRequest = (id: string) => {
     setRequests((current) => {
-      const updated = current.map((request) =>
-        request.id === id
-          ? {
-              ...request,
-              status: "accepted" as const,
-            }
-          : request,
+      const updated = current.map(
+        (request) =>
+          request.id === id
+            ? {
+                ...request,
+                status:
+                  "accepted" as const,
+              }
+            : request,
       );
 
-      const acceptedRequest = updated.find(
-        (request) => request.id === id,
-      );
+      const acceptedRequest =
+        updated.find(
+          (request) => request.id === id,
+        );
 
       if (acceptedRequest) {
         void updateInvestigationRequest(
@@ -317,7 +414,8 @@ function App() {
         },
       );
 
-      const url = URL.createObjectURL(blob);
+      const url =
+        URL.createObjectURL(blob);
 
       window.open(
         url,
@@ -335,10 +433,11 @@ function App() {
     }
   };
 
-  const pendingCount = requests.filter(
-    (request) =>
-      request.status === "pending",
-  ).length;
+  const pendingCount =
+    requests.filter(
+      (request) =>
+        request.status === "pending",
+    ).length;
 
   return (
     <div className="portal">
@@ -375,8 +474,9 @@ function App() {
           </h1>
 
           <p>
-            Incoming cryptocurrency investigation
-            reports received from Crypto Guard V2.
+            Incoming cryptocurrency
+            investigation reports received
+            from Crypto Guard V2.
           </p>
         </section>
 
@@ -392,12 +492,31 @@ function App() {
 
             <p>
               This portal is a simulated
-              presentation workflow. It is not an
-              official SAHYOG, MHA, VASP, or
+              presentation workflow. It is not
+              an official SAHYOG, MHA, VASP, or
               law-enforcement response system.
             </p>
           </div>
         </section>
+
+        {databaseError && (
+          <section
+            style={{
+              marginTop: "14px",
+              padding: "12px 14px",
+              border: "1px solid #d9a441",
+              borderRadius: "8px",
+              background:
+                "rgba(217, 164, 65, 0.08)",
+              color: "#8a6419",
+              fontSize: "13px",
+              fontWeight: 700,
+              lineHeight: 1.45,
+            }}
+          >
+            {databaseError}
+          </section>
+        )}
 
         <section className="queue-header">
           <div>
@@ -441,7 +560,8 @@ function App() {
             {requests.map((request) => (
               <article
                 className={`request-card ${
-                  request.status === "accepted"
+                  request.status ===
+                  "accepted"
                     ? "request-accepted"
                     : ""
                 }`}
