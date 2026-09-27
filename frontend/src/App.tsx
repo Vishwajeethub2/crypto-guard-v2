@@ -2521,7 +2521,9 @@ function App() {
 
     const portalUrl = DEMO_PORTAL_URL.replace(/\/$/, "");
 
-    let portalWindow: Window | null = null;
+    setError(null);
+
+    let readyTimeout: number | undefined;
 
     const handlePortalReady = (event: MessageEvent) => {
       if (
@@ -2531,6 +2533,8 @@ function App() {
       ) {
         return;
       }
+
+      const portalWindow = event.source as Window | null;
 
       if (!portalWindow) {
         return;
@@ -2557,6 +2561,10 @@ function App() {
           "message",
           handlePortalReady,
         );
+
+        if (readyTimeout !== undefined) {
+          window.clearTimeout(readyTimeout);
+        }
       } catch (err) {
         console.error(
           "Failed to send investigation request to demo portal:",
@@ -2571,12 +2579,19 @@ function App() {
           "message",
           handlePortalReady,
         );
+
+        if (readyTimeout !== undefined) {
+          window.clearTimeout(readyTimeout);
+        }
       }
     };
 
     /*
-     * Listen before opening the portal so the ready
-     * message cannot be missed.
+     * Listen before the browser opens the portal.
+     * The portal sends its READY message back to this window,
+     * and event.source gives us the actual portal Window.
+     * This avoids calling window.open() from JavaScript, which
+     * is what was being blocked by the production browser.
      */
     window.addEventListener(
       "message",
@@ -2584,30 +2599,20 @@ function App() {
     );
 
     /*
-     * Open a blank tab synchronously from the user's click.
-     * Some browsers block window.open() when it directly
-     * navigates to another origin. Navigating the already-open
-     * tab afterwards keeps the action tied to the user gesture.
+     * The portal is opened by a real <a target="..."> navigation
+     * in the JSX below. Native browser navigation is used instead
+     * of window.open(), so popup-blocking JavaScript is not involved.
      */
-    portalWindow = window.open(
-      "about:blank",
-      "_blank",
-    );
-
-    if (!portalWindow) {
+    readyTimeout = window.setTimeout(() => {
       window.removeEventListener(
         "message",
         handlePortalReady,
       );
 
       setError(
-        "The demo portal could not be opened. Please allow pop-ups for this site.",
+        "The demo portal opened, but it did not respond to Crypto Guard. Please check that the demo portal is available.",
       );
-
-      return;
-    }
-
-    portalWindow.location.href = portalUrl;
+    }, 15000);
   }
 
   /* =========================
@@ -7846,12 +7851,16 @@ function App() {
                       ✓ Investigation request sent successfully
                     </div>
 
-                    <button
-                      type="button"
+                    <a
+                      href={DEMO_PORTAL_URL}
+                      target="CryptoGuardInvestigationPortal"
+                      rel="opener"
                       onClick={handleOpenInvestigationPortal}
                       style={{
+                        display: "block",
                         marginTop: "8px",
                         width: "100%",
+                        boxSizing: "border-box",
                         padding: "9px 10px",
                         border: "1px solid #167C80",
                         borderRadius: "6px",
@@ -7860,10 +7869,12 @@ function App() {
                         cursor: "pointer",
                         fontSize: "14px",
                         fontWeight: 800,
+                        textAlign: "center",
+                        textDecoration: "none",
                       }}
                     >
                       Open Investigation Portal →
-                    </button>
+                    </a>
                   </>
                 )}
             </div>
