@@ -2519,13 +2519,13 @@ function App() {
       return;
     }
 
-    const portalUrl = DEMO_PORTAL_URL;
+    const portalUrl = DEMO_PORTAL_URL.replace(/\/$/, "");
 
     let portalWindow: Window | null = null;
 
     const handlePortalReady = (event: MessageEvent) => {
       if (
-        event.origin !== DEMO_PORTAL_URL.replace(/\/$/, "") ||
+        event.origin !== portalUrl ||
         event.data?.type !==
           "CRYPTO_GUARD_DEMO_PORTAL_READY"
       ) {
@@ -2546,7 +2546,7 @@ function App() {
             filename: request.filename,
             pdfBuffer: request.pdfBuffer,
           },
-          DEMO_PORTAL_URL.replace(/\/$/, ""),
+          portalUrl,
           [request.pdfBuffer],
         );
 
@@ -2566,6 +2566,11 @@ function App() {
         setError(
           "The investigation request could not be sent to the demo portal.",
         );
+
+        window.removeEventListener(
+          "message",
+          handlePortalReady,
+        );
       }
     };
 
@@ -2578,8 +2583,14 @@ function App() {
       handlePortalReady,
     );
 
+    /*
+     * Open a blank tab synchronously from the user's click.
+     * Some browsers block window.open() when it directly
+     * navigates to another origin. Navigating the already-open
+     * tab afterwards keeps the action tied to the user gesture.
+     */
     portalWindow = window.open(
-      portalUrl,
+      "about:blank",
       "_blank",
     );
 
@@ -2590,9 +2601,13 @@ function App() {
       );
 
       setError(
-        "The demo portal could not be opened. Please allow pop-ups for localhost.",
+        "The demo portal could not be opened. Please allow pop-ups for this site.",
       );
+
+      return;
     }
+
+    portalWindow.location.href = portalUrl;
   }
 
   /* =========================
