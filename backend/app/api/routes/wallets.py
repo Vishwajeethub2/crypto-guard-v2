@@ -2,17 +2,25 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.case_model import Case
-from app.db.neo4j import get_transaction_details, trace_wallet
+from app.db.neo4j import (
+    get_transaction_details,
+    trace_bitcoin_wallet,
+    trace_wallet,
+)
 from app.db.session import get_db
 from app.db.wallet_model import Wallet
 from app.schemas.risk import WalletRiskAnalysisResponse
 from app.schemas.wallet import WalletCreate
 from app.services.auth import get_current_user
 from app.services.ingestion import (
+    ingest_live_bitcoin_transactions,
     ingest_live_transfers_bidirectional,
     ingest_live_transfers_recursive,
 )
-from app.services.blockchain import validate_wallet_address
+from app.services.blockchain import (
+    validate_bitcoin_address,
+    validate_wallet_address,
+)
 from app.services.scoring import calculate_wallet_risk
 from app.services.peel_chain_analysis import analyze_peel_chain
 from app.services.cross_chain_analysis import analyze_cross_chain
@@ -157,7 +165,15 @@ def trace_wallet_api(
     max_live_transfers_per_wallet: int = 10,
     current_user=Depends(get_current_user),
 ):
-    if not validate_wallet_address(address):
+    chain = chain.lower()
+
+    if chain == "bitcoin":
+        if not validate_bitcoin_address(address):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Bitcoin address",
+            )
+    elif not validate_wallet_address(address):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
@@ -167,20 +183,33 @@ def trace_wallet_api(
         live_refresh_result = None
 
         if refresh_live:
-            live_refresh_result = ingest_live_transfers_recursive(
-                chain=chain,
-                address=address,
-                max_hops=max_hops,
-                max_wallets=max_live_wallets,
-                max_transfers_per_wallet=max_live_transfers_per_wallet,
-            )
+            if chain == "bitcoin":
+                live_refresh_result = ingest_live_bitcoin_transactions(
+                    address=address,
+                    max_count=max_live_transfers_per_wallet,
+                )
+            else:
+                live_refresh_result = ingest_live_transfers_recursive(
+                    chain=chain,
+                    address=address,
+                    max_hops=max_hops,
+                    max_wallets=max_live_wallets,
+                    max_transfers_per_wallet=max_live_transfers_per_wallet,
+                )
 
-        traces = trace_wallet(
-            address=address,
-            chain=chain,
-            direction=direction,
-            max_hops=max_hops,
-        )
+        if chain == "bitcoin":
+            traces = trace_bitcoin_wallet(
+                address=address,
+                direction=direction,
+                max_hops=max_hops,
+            )
+        else:
+            traces = trace_wallet(
+                address=address,
+                chain=chain,
+                direction=direction,
+                max_hops=max_hops,
+            )
 
         return {
             "address": address,

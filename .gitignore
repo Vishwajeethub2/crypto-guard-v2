@@ -47,3 +47,5 @@ ml/datasets/processed/elliptic_plus_plus/elliptic_behavioral.csv
 ml/datasets/processed/elliptic_plus_plus/elliptic_behavioral_reduced.csv
 ml/datasets/processed/elliptic_plus_plus/elliptic_behavioral_temporal.csv
 ml/datasets/processed/elliptic_plus_plus/elliptic_wallet_validation.csv
+.vercel
+.env*

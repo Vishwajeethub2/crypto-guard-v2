@@ -28,6 +28,273 @@ def get_web3(chain: str) -> Web3:
 def validate_wallet_address(address: str) -> bool:
     return Web3.is_address(address)
 
+def _decode_base58check(address: str) -> bytes | None:
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+    if not address:
+        return None
+
+    try:
+        number = 0
+
+        for character in address:
+            if character not in alphabet:
+                return None
+            number = number * 58 + alphabet.index(character)
+
+        decoded = number.to_bytes(
+            (number.bit_length() + 7) // 8,
+            byteorder="big",
+        )
+
+        leading_zeroes = len(address) - len(address.lstrip("1"))
+        decoded = b"\x00" * leading_zeroes + decoded
+
+        if len(decoded) < 5:
+            return None
+
+        payload = decoded[:-4]
+        checksum = decoded[-4:]
+
+        import hashlib
+
+        expected_checksum = hashlib.sha256(
+            hashlib.sha256(payload).digest()
+        ).digest()[:4]
+
+        if checksum != expected_checksum:
+            return None
+
+        return payload
+
+    except (ValueError, OverflowError):
+        return None
+
+
+def _bech32_polymod(values: list[int]) -> int:
+    generator = [
+        0x3B6A57B2,
+        0x26508E6D,
+        0x1EA119FA,
+        0x3D4233DD,
+        0x2A1462B3,
+    ]
+
+    checksum = 1
+
+    for value in values:
+        top = checksum >> 25
+        checksum = ((checksum & 0x1FFFFFF) << 5) ^ value
+
+        for index in range(5):
+            if (top >> index) & 1:
+                checksum ^= generator[index]
+
+    return checksum
+
+
+def _bech32_hrp_expand(hrp: str) -> list[int]:
+    return [
+        ord(character) >> 5
+        for character in hrp
+    ] + [
+        0
+    ] + [
+        ord(character) & 31
+        for character in hrp
+    ]
+
+
+def _bech32_verify_checksum(hrp: str, data: list[int]) -> str | None:
+    polymod = _bech32_polymod(
+        _bech32_hrp_expand(hrp) + data
+    )
+
+    if polymod == 1:
+        return "bech32"
+
+    if polymod == 0x2BC830A3:
+        return "bech32m"
+
+    return None
+
+
+def _bech32_decode(address: str) -> tuple[str, list[int], str] | None:
+    if not address:
+        return None
+
+    if address.lower() != address and address.upper() != address:
+        return None
+
+    address = address.lower()
+
+    if len(address) < 8 or len(address) > 90:
+        return None
+
+    separator = address.rfind("1")
+
+    if separator < 1 or separator + 7 > len(address):
+        return None
+
+    hrp = address[:separator]
+    data_part = address[separator + 1:]
+
+    charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+    try:
+        data = [
+            charset.index(character)
+            for character in data_part
+        ]
+    except ValueError:
+        return None
+
+    encoding = _bech32_verify_checksum(
+        hrp,
+        data,
+    )
+
+    if encoding is None:
+        return None
+
+    return (
+        hrp,
+        data[:-6],
+        encoding,
+    )
+
+
+def _convertbits(
+    data: list[int],
+    from_bits: int,
+    to_bits: int,
+    pad: bool = True,
+) -> list[int] | None:
+    accumulator = 0
+    bits = 0
+    result = []
+    max_value = (1 << to_bits) - 1
+
+    for value in data:
+        if value < 0 or value >> from_bits:
+            return None
+
+        accumulator = (
+            (accumulator << from_bits) | value
+        )
+        bits += from_bits
+
+        while bits >= to_bits:
+            bits -= to_bits
+            result.append(
+                (accumulator >> bits) & max_value
+            )
+
+    if pad:
+        if bits:
+            result.append(
+                (accumulator << (to_bits - bits))
+                & max_value
+            )
+    else:
+        if bits >= from_bits:
+            return None
+
+        if (
+            (accumulator << (to_bits - bits))
+            & max_value
+        ):
+            return None
+
+    return result
+
+
+def validate_bitcoin_address(address: str) -> bool:
+    """
+    Validate a Bitcoin mainnet address.
+
+    Supported formats:
+    - P2PKH: 1...
+    - P2SH: 3...
+    - Bech32 SegWit: bc1q...
+    - Bech32m Taproot: bc1p...
+
+    This validates the address structure and checksum.
+    It does not query the blockchain.
+    """
+
+    if not isinstance(address, str):
+        return False
+
+    address = address.strip()
+
+    if not address:
+        return False
+
+    # Legacy Base58Check addresses.
+    if address[0] in {"1", "3"}:
+        payload = _decode_base58check(address)
+
+        if payload is None:
+            return False
+
+        # Mainnet:
+        # 0x00 = P2PKH
+        # 0x05 = P2SH
+        if len(payload) != 21:
+            return False
+
+        return payload[0] in {0x00, 0x05}
+
+    # Native SegWit / Taproot.
+    if address.lower().startswith("bc1"):
+        decoded = _bech32_decode(address)
+
+        if decoded is None:
+            return False
+
+        hrp, data, encoding = decoded
+
+        if hrp != "bc" or not data:
+            return False
+
+        witness_version = data[0]
+
+        if witness_version > 16:
+            return False
+
+        witness_program = _convertbits(
+            data[1:],
+            5,
+            8,
+            pad=False,
+        )
+
+        if witness_program is None:
+            return False
+
+        program_length = len(witness_program)
+
+        if program_length < 2 or program_length > 40:
+            return False
+
+        # Witness version 0 must use Bech32.
+        if witness_version == 0:
+            if encoding != "bech32":
+                return False
+
+            if program_length not in {20, 32}:
+                return False
+
+        # Witness versions 1-16 must use Bech32m.
+        else:
+            if encoding != "bech32m":
+                return False
+
+        return True
+
+    return False
+
 
 def get_native_balance(chain: str, address: str):
     w3 = get_web3(chain)

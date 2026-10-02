@@ -2394,9 +2394,7 @@ function App() {
 
       const filename =
         filenameMatch?.[1] ||
-        `case_${selectedCase.id}_investigation_report.pdf  /* PHASE 1 COMPLETE: palette-only migration.
-     Phase 2 will refine header structure without changing behavior. */
-`;
+        `case_${selectedCase.id}_investigation_report.pdf`;
 
       const downloadUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -6165,6 +6163,10 @@ function App() {
                     <option value="base">
                       Base
                     </option>
+
+                    <option value="bitcoin">
+                      Bitcoin
+                    </option>
                   </select>
 
                   <label
@@ -6576,6 +6578,10 @@ function App() {
 
                   <option value="base">
                     Base
+                  </option>
+
+                  <option value="bitcoin">
+                    Bitcoin
                   </option>
                 </select>
 

@@ -1,0 +1,1 @@
+"""Bitcoin blockchain integration for Crypto Guard."""
