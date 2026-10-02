@@ -40,7 +40,15 @@ def create_wallet(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if not validate_wallet_address(wallet_data.address):
+    chain = wallet_data.chain.lower()
+
+    if chain == "bitcoin":
+        if not validate_bitcoin_address(wallet_data.address):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Bitcoin address",
+            )
+    elif not validate_wallet_address(wallet_data.address):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
