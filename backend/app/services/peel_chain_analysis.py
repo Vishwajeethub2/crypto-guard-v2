@@ -1,6 +1,30 @@
 from typing import Any, Dict, List, Optional
 
-from app.db.neo4j import get_peel_chain_candidates
+from app.db.neo4j import (
+    get_bitcoin_peel_chain_candidates,
+    get_peel_chain_candidates as get_evm_peel_chain_candidates,
+)
+
+
+def get_peel_chain_candidates(
+    address: str,
+    chain: str = "ethereum",
+    max_hops: int = 5,
+):
+    """Return peel-chain candidates using the graph model for the chain."""
+    chain = chain.lower().strip()
+
+    if chain == "bitcoin":
+        return get_bitcoin_peel_chain_candidates(
+            address=address,
+            max_hops=max_hops,
+        )
+
+    return get_evm_peel_chain_candidates(
+        address=address,
+        chain=chain,
+        max_hops=max_hops,
+    )
 
 
 def _to_float(value: Any) -> Optional[float]:

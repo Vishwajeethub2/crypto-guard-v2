@@ -3133,6 +3133,280 @@ def get_peel_chain_candidates(
 
 
 
+def get_bitcoin_peel_chain_candidates(
+    address: str,
+    max_hops: int = 5,
+):
+    """
+    Retrieve Bitcoin peel-chain candidates from the normalized UTXO graph.
+
+    Bitcoin is represented as:
+        Wallet -BITCOIN_INPUT-> BitcoinTransaction
+        BitcoinTransaction -BITCOIN_OUTPUT-> Wallet
+
+    One logical wallet hop is:
+        Wallet -> BitcoinTransaction -> Wallet
+
+    The query is generated for the requested hop count. Each output
+    relationship is bound directly in the path so the returned transfer
+    evidence is guaranteed to belong to the corresponding transaction.
+
+    This preserves Bitcoin's UTXO model and does not claim that a
+    particular input funded a particular output in a multi-input /
+    multi-output transaction.
+    """
+    if not address:
+        raise ValueError("Wallet address is required")
+
+    address = address.strip()
+
+    if max_hops < 2:
+        raise ValueError("max_hops must be at least 2")
+
+    if max_hops > 5:
+        raise ValueError("max_hops cannot exceed 5")
+
+    # Build an explicitly directed UTXO path:
+    #
+    # source -> tx1 -> wallet1 -> tx2 -> wallet2 -> ...
+    #
+    # Each BITCOIN_OUTPUT relationship is named so its value can be
+    # returned without issuing additional MATCH clauses.
+    wallet_names = ["source"]
+    path_parts = [
+        '(source:Wallet {address: $address, chain: "bitcoin"})'
+    ]
+    output_rel_names = []
+
+    for hop in range(1, max_hops + 1):
+        tx_name = f"tx{hop}"
+        wallet_name = "target" if hop == max_hops else f"wallet{hop}"
+        output_rel_name = f"output_rel{hop}"
+
+        wallet_names.append(wallet_name)
+        output_rel_names.append(output_rel_name)
+
+        path_parts.append(
+            f"-[:BITCOIN_INPUT]->({tx_name}:BitcoinTransaction)"
+        )
+        path_parts.append(
+            f'-[{output_rel_name}:BITCOIN_OUTPUT]->'
+            f'({wallet_name}:Wallet {{chain: "bitcoin"}})'
+        )
+
+    pattern = "".join(path_parts)
+
+    # Do not allow the same wallet to appear twice in one candidate path.
+    uniqueness_conditions = []
+    for index in range(1, len(wallet_names)):
+        for previous_index in range(index):
+            uniqueness_conditions.append(
+                f"{wallet_names[index]}.address <> "
+                f"{wallet_names[previous_index]}.address"
+            )
+
+    uniqueness_clause = " AND\n        ".join(uniqueness_conditions)
+
+    wallet_return = ",\n".join(
+        f"""            {{
+                address: {wallet_name}.address,
+                chain: {wallet_name}.chain
+            }}"""
+        for wallet_name in wallet_names
+    )
+
+    transfer_return = ",\n".join(
+        f"""            {{
+                from_address: {wallet_names[index]}.address,
+                to_address: {wallet_names[index + 1]}.address,
+                from_chain: "bitcoin",
+                to_chain: "bitcoin",
+                transaction_hash: tx{index + 1}.txid,
+                chain: "bitcoin",
+                asset: "BTC",
+                value: toFloat({output_rel_names[index]}.value) / 100000000.0,
+                value_satoshis: toInteger({output_rel_names[index]}.value),
+                category: "bitcoin_utxo",
+                block_number: tx{index + 1}.block_height,
+                timestamp: tx{index + 1}.block_time,
+                contract_address: NULL
+            }}"""
+        for index in range(max_hops)
+    )
+
+    query = f"""
+    MATCH {pattern}
+
+    WHERE
+        {uniqueness_clause}
+
+    RETURN
+        [
+{wallet_return}
+        ] AS wallets,
+
+        [
+{transfer_return}
+        ] AS transfers
+
+    LIMIT 500
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+        )
+        return [record.data() for record in result]
+
+
+def get_bitcoin_cross_chain_transfer_candidates(
+    address: str,
+    target_chain: str | None = None,
+    time_window_minutes: int = 120,
+    value_tolerance: float = 0.20,
+    limit: int = 250,
+):
+    """
+    Retrieve Bitcoin-to-EVM cross-chain research candidates from Neo4j.
+
+    Bitcoin is read from the normalized UTXO graph:
+        Wallet -> BitcoinTransaction -> Wallet
+
+    The Bitcoin source value is converted from satoshis to BTC. The
+    destination side uses the existing TRANSFER graph used by EVM chains.
+
+    This is transaction-graph correlation only. It does not prove that a
+    specific Bitcoin input funded a specific output or that a bridge was used.
+    """
+    if not address:
+        raise ValueError("Wallet address is required")
+
+    address = address.strip()
+    target_chain = target_chain.lower().strip() if target_chain else None
+
+    if time_window_minutes < 1 or time_window_minutes > 1440:
+        raise ValueError("time_window_minutes must be between 1 and 1440")
+
+    if value_tolerance < 0 or value_tolerance > 1:
+        raise ValueError("value_tolerance must be between 0 and 1")
+
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+
+    window_seconds = time_window_minutes * 60
+
+    query = """
+    MATCH (
+        source_wallet:Wallet {
+            address: $address,
+            chain: "bitcoin"
+        }
+    )-[:BITCOIN_INPUT]->(source_tx:BitcoinTransaction)
+
+    WITH DISTINCT source_wallet, source_tx
+
+    MATCH (source_tx)-[source_output:BITCOIN_OUTPUT]->(
+        source_receiver:Wallet {chain: "bitcoin"}
+    )
+
+    WHERE source_receiver.address <> source_wallet.address
+      AND source_tx.block_time IS NOT NULL
+      AND source_output.value IS NOT NULL
+
+    WITH
+        source_wallet,
+        source_tx,
+        source_receiver,
+        sum(toInteger(source_output.value)) / 100000000.0 AS source_value_btc,
+        datetime({epochSeconds: toInteger(source_tx.block_time)}) AS source_datetime
+
+    MATCH (
+        destination_sender:Wallet
+    )-[incoming:TRANSFER]->(destination_wallet:Wallet)
+
+    WHERE incoming.chain <> "bitcoin"
+      AND ($target_chain IS NULL OR incoming.chain = $target_chain)
+      AND incoming.timestamp IS NOT NULL
+      AND incoming.value IS NOT NULL
+
+    WITH
+        source_wallet,
+        source_tx,
+        source_receiver,
+        source_value_btc,
+        source_datetime,
+        destination_sender,
+        destination_wallet,
+        incoming,
+        abs(
+            duration.inSeconds(
+                source_datetime,
+                datetime(incoming.timestamp)
+            ).seconds
+        ) AS time_gap_seconds
+
+    WHERE time_gap_seconds <= $window_seconds
+
+    WITH
+        source_wallet,
+        source_tx,
+        source_receiver,
+        source_value_btc,
+        source_datetime,
+        destination_sender,
+        destination_wallet,
+        incoming,
+        time_gap_seconds
+
+    RETURN
+        source_wallet.address AS source_address,
+        "bitcoin" AS source_chain,
+        source_receiver.address AS source_receiver_address,
+        "bitcoin" AS source_transfer_chain,
+        source_tx.txid AS source_transaction_hash,
+        "BTC" AS source_asset,
+        source_value_btc AS source_value,
+        "bitcoin_utxo" AS source_category,
+        source_tx.block_height AS source_block_number,
+        toString(source_datetime) AS source_timestamp,
+        NULL AS source_contract_address,
+
+        destination_sender.address AS destination_sender_address,
+        destination_sender.chain AS destination_sender_chain,
+        destination_wallet.address AS destination_address,
+        destination_wallet.chain AS destination_chain,
+        incoming.chain AS destination_transfer_chain,
+        incoming.transaction_hash AS destination_transaction_hash,
+        incoming.asset AS destination_asset,
+        incoming.value AS destination_value,
+        incoming.category AS destination_category,
+        incoming.block_number AS destination_block_number,
+        incoming.timestamp AS destination_timestamp,
+        incoming.contract_address AS destination_contract_address,
+
+        time_gap_seconds,
+        NULL AS value_difference,
+        NULL AS value_difference_ratio,
+        false AS value_comparable
+
+    ORDER BY
+        time_gap_seconds ASC
+
+    LIMIT $limit
+    """
+
+    with get_neo4j_session() as session:
+        result = session.run(
+            query,
+            address=address,
+            target_chain=target_chain,
+            window_seconds=window_seconds,
+            value_tolerance=value_tolerance,
+            limit=limit,
+        )
+        return [dict(record) for record in result]
+
 def get_cross_chain_transfer_candidates(
 
 
@@ -3849,11 +4123,98 @@ def create_test_chain():
 
 
 
+
+def _analyze_bitcoin_wallet_behavior(address: str):
+    """
+    Calculate wallet behavior from the Bitcoin UTXO graph.
+
+    Bitcoin is represented as:
+        Wallet -BITCOIN_INPUT-> BitcoinTransaction
+        BitcoinTransaction -BITCOIN_OUTPUT-> Wallet
+
+    Values are transaction-level output evidence and do not claim an
+    exact input-to-output fund flow for multi-input/multi-output
+    transactions.
+    """
+    address = address.strip()
+
+    neighbors = _get_bitcoin_wallet_neighbors(address)
+
+    outgoing = [
+        item
+        for item in neighbors
+        if item.get("direction") == "outgoing"
+    ]
+
+    incoming = [
+        item
+        for item in neighbors
+        if item.get("direction") == "incoming"
+    ]
+
+    outgoing_connections = {
+        item.get("address")
+        for item in outgoing
+        if item.get("address")
+    }
+
+    incoming_connections = {
+        item.get("address")
+        for item in incoming
+        if item.get("address")
+    }
+
+    outgoing_transactions = {
+        item.get("transaction_hash")
+        for item in outgoing
+        if item.get("transaction_hash")
+    }
+
+    incoming_transactions = {
+        item.get("transaction_hash")
+        for item in incoming
+        if item.get("transaction_hash")
+    }
+
+    outgoing_value = sum(
+        float(item.get("value") or 0.0)
+        for item in outgoing
+    )
+
+    incoming_value = sum(
+        float(item.get("value") or 0.0)
+        for item in incoming
+    )
+
+    return {
+        "address": address,
+        "chain": "bitcoin",
+        "outgoing_connections": len(outgoing_connections),
+        "incoming_connections": len(incoming_connections),
+        "total_connections": (
+            len(outgoing_connections)
+            + len(incoming_connections)
+        ),
+        "outgoing_transaction_count": len(outgoing_transactions),
+        "incoming_transaction_count": len(incoming_transactions),
+        "total_transaction_count": (
+            len(outgoing_transactions)
+            + len(incoming_transactions)
+        ),
+        "outgoing_value": outgoing_value,
+        "incoming_value": incoming_value,
+        "unique_assets": 1 if neighbors else 0,
+    }
+
 def analyze_wallet_behavior(address: str, chain: str):
 
 
 
     chain = chain.lower()
+
+    if chain == "bitcoin":
+        return _analyze_bitcoin_wallet_behavior(address)
+
 
 
 
@@ -6441,5 +6802,3 @@ def get_wallet_timeline(
             "outgoing_transactions": outgoing_transactions,
             "incoming_transactions": incoming_transactions,
         }
-
-
