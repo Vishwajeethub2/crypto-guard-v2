@@ -13,7 +13,10 @@ from app.schemas.timeline import TimelineAnalyticsResponse
 from app.schemas.ml_risk import MLRiskResponse
 
 from app.services.auth import get_current_user
-from app.services.blockchain import validate_wallet_address
+from app.services.blockchain import (
+    validate_bitcoin_address,
+    validate_wallet_address,
+)
 from app.services.scoring import calculate_wallet_risk
 from app.services.advanced_risk import analyze_wallet_advanced_risk
 from app.services.graph_analytics import analyze_wallet_graph_analytics
@@ -26,6 +29,16 @@ from app.services.aml_determination import (
     build_aml_evidence_assessment,
 )
 
+
+
+def _validate_wallet_address_for_chain(
+    address: str,
+    chain: str,
+) -> bool:
+    if chain.lower() == "bitcoin":
+        return validate_bitcoin_address(address)
+
+    return validate_wallet_address(address)
 
 router = APIRouter(
     prefix="/cases",
@@ -135,7 +148,10 @@ def analyze_case_wallet_risk(
             detail="Wallet not found in this case",
         )
 
-    if not validate_wallet_address(wallet.address):
+    if not _validate_wallet_address_for_chain(
+        wallet.address,
+        wallet.chain,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
@@ -208,7 +224,10 @@ def analyze_case_wallet_advanced_risk(
             detail="Wallet not found in this case",
         )
 
-    if not validate_wallet_address(wallet.address):
+    if not _validate_wallet_address_for_chain(
+        wallet.address,
+        wallet.chain,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
@@ -295,7 +314,10 @@ def analyze_case_wallet_vasp_attribution(
     # Validate address
     # ----------------------------------------------------------
 
-    if not validate_wallet_address(wallet.address):
+    if not _validate_wallet_address_for_chain(
+        wallet.address,
+        wallet.chain,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
@@ -396,7 +418,10 @@ def analyze_case_wallet_ml_risk(
     # Validate address
     # ----------------------------------------------------------
 
-    if not validate_wallet_address(wallet.address):
+    if not _validate_wallet_address_for_chain(
+        wallet.address,
+        wallet.chain,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
@@ -550,7 +575,10 @@ def analyze_case_wallet_aml_assessment(
             detail="Wallet not found in this case",
         )
 
-    if not validate_wallet_address(wallet.address):
+    if not _validate_wallet_address_for_chain(
+        wallet.address,
+        wallet.chain,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
@@ -658,7 +686,10 @@ def analyze_case_wallet_graph_analytics(
             detail="Wallet not found in this case",
         )
 
-    if not validate_wallet_address(wallet.address):
+    if not _validate_wallet_address_for_chain(
+        wallet.address,
+        wallet.chain,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
@@ -730,7 +761,10 @@ def analyze_case_wallet_timeline(
             detail="Wallet not found in this case",
         )
 
-    if not validate_wallet_address(wallet.address):
+    if not _validate_wallet_address_for_chain(
+        wallet.address,
+        wallet.chain,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Invalid wallet address",
